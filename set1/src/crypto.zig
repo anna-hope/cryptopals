@@ -50,3 +50,45 @@ pub fn fixedXor(buf1_hex: []const u8, buf2_hex: []const u8, allocator: Allocator
 
     return out;
 }
+
+test "hex to base64" {
+    const allocator = std.testing.allocator;
+    const source = try allocator.alloc(u8, 100);
+    defer allocator.free(source);
+
+    std.mem.copyForwards(u8, source, "49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f6e6f7573206d757368726f6f6d");
+
+    var hex_len: usize = 0;
+    while (hex_len < source.len) {
+        var current_char_is_hex = false;
+        for (std.fmt.hex_charset) |char| {
+            if (source[hex_len] == char) {
+                current_char_is_hex = true;
+            }
+        }
+
+        if (!current_char_is_hex) {
+            break;
+        }
+
+        hex_len += 1;
+    }
+
+    const output = try hexToBase64(source[0..hex_len], allocator);
+    defer allocator.free(output);
+
+    const expected = "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t";
+    try std.testing.expectStringStartsWith(output, expected);
+}
+
+test "fixed xor" {
+    const buf1 = "1c0111001f010100061a024b53535009181c";
+    const buf2 = "686974207468652062756c6c277320657965";
+
+    const allocator = std.testing.allocator;
+    const out = try fixedXor(buf1, buf2, allocator);
+    defer allocator.free(out);
+
+    const expected = "746865206b696420646f6e277420706c6179";
+    try std.testing.expectStringStartsWith(out, expected);
+}
