@@ -217,3 +217,24 @@ test "get character frequencies" {
         defer allocator.free(word);
     }
 }
+
+test "decrypt XOR'd hex" {
+    const allocator = testing.allocator;
+    const dict_path = "/usr/share/dict/words";
+    const helpers = @import("helpers.zig");
+
+    const input = "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736";
+
+    const words = try helpers.readLines(allocator, dict_path);
+    defer allocator.free(words);
+
+    const decrypted_output = try decryptXordHex(allocator, input, words);
+    defer allocator.free(decrypted_output.output);
+
+    try testing.expectEqualStrings("Cooking MC's like a pound of bacon", decrypted_output.output);
+    try testing.expectEqual('X', decrypted_output.key);
+
+    for (words) |word| {
+        defer allocator.free(word);
+    }
+}
