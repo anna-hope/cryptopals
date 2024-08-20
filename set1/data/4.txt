@@ -1,0 +1,11 @@
+--2024-08-20 17:49:33--  https://cryptopals.com/static/challenge-data/4.txt
+Resolving cryptopals.com (cryptopals.com)... 13.227.37.2, 13.227.37.120, 13.227.37.17, ...
+Connecting to cryptopals.com (cryptopals.com)|13.227.37.2|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 19944 (19K) [text/plain]
+Saving to: ‘4.txt’
+
+     0K .......... .........                                  100% 81.6M=0s
+
+2024-08-20 17:49:33 (81.6 MB/s) - ‘4.txt’ saved [19944/19944]
+
