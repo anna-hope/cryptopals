@@ -10,7 +10,9 @@ const Allocator = std.mem.Allocator;
 
 const encoder = base64.Base64Encoder.init(base64.standard.alphabet_chars, base64.standard.pad_char);
 
-const char_frequency_map = std.AutoHashMap(u8, f32);
+pub const char_frequency_map = std.AutoHashMap(u8, f32);
+
+const alphabet_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 pub const CryptoError = error{
     UnequalLengthBuffers,
@@ -72,7 +74,7 @@ pub fn fixedXorHex(allocator: Allocator, buf1_hex: []const u8, buf2_hex: []const
     return try bytesToHex(allocator, out_bytes);
 }
 
-fn getCharFrequencies(allocator: Allocator, words: [][]u8) !char_frequency_map {
+pub fn getCharFrequencies(allocator: Allocator, words: [][]u8) !char_frequency_map {
     var char_counts = std.AutoHashMap(u8, u64).init(allocator);
     defer char_counts.deinit();
 
@@ -107,18 +109,20 @@ fn scoreString(string: []const u8, char_frequencies: char_frequency_map) f32 {
     return score / @as(f32, @floatFromInt(string.len));
 }
 
-pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) !struct { output: []u8, key: u8 } {
-    var char_frequencies = try getCharFrequencies(allocator, words);
-    defer char_frequencies.deinit();
+pub const DecryptedOutput = struct {
+    output: []u8,
+    key: u8,
+    score: f32,
+};
 
+pub fn decryptXordHex(allocator: Allocator, input: []const u8, char_frequencies: char_frequency_map) !DecryptedOutput {
     // Get the alphabet to have a list of all the possible characters that could act as the key.
     // (Assuming alphabetic ascii.)
     var alphabet = std.ArrayList(u8).init(allocator);
     defer alphabet.deinit();
 
-    var char_freqs_keys_iter = char_frequencies.keyIterator();
-    while (char_freqs_keys_iter.next()) |char| {
-        try alphabet.append(char.*);
+    for (alphabet_chars) |char| {
+        try alphabet.append(char);
     }
 
     const input_bytes = try allocator.alloc(u8, input.len);
@@ -146,7 +150,7 @@ pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) !s
         }
     }
 
-    return .{ .output = best_candidate, .key = key.? };
+    return DecryptedOutput{ .output = best_candidate, .key = key.?, .score = best_score };
 }
 
 test "hex to base64" {
@@ -227,8 +231,10 @@ test "decrypt XOR'd hex" {
 
     const words = try helpers.readLines(allocator, dict_path);
     defer allocator.free(words);
+    var char_frequencies = try getCharFrequencies(allocator, words);
+    defer char_frequencies.deinit();
 
-    const decrypted_output = try decryptXordHex(allocator, input, words);
+    const decrypted_output = try decryptXordHex(allocator, input, char_frequencies);
     defer allocator.free(decrypted_output.output);
 
     try testing.expectEqualStrings("Cooking MC's like a pound of bacon", decrypted_output.output);

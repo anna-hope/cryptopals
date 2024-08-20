@@ -10,7 +10,7 @@ pub fn readLines(allocator: Allocator, file_path: []const u8) ![][]u8 {
 
     const file_reader = file.reader();
     var words = std.ArrayList([]u8).init(allocator);
-    while (try file_reader.readUntilDelimiterOrEofAlloc(allocator, '\n', 50)) |word| {
+    while (try file_reader.readUntilDelimiterOrEofAlloc(allocator, '\n', 1024)) |word| {
         try words.append(word[0..word.len]);
     }
 
@@ -18,17 +18,15 @@ pub fn readLines(allocator: Allocator, file_path: []const u8) ![][]u8 {
 }
 
 test "read file" {
-    const dict_path = "/usr/share/dict/words";
+    const path = "/Users/annahope/projects/rc/cryptopals/set1/data/4.txt";
     const allocator = testing.allocator;
 
-    const words = try readLines(allocator, dict_path);
-    defer allocator.free(words);
+    const lines = try readLines(allocator, path);
+    defer allocator.free(lines);
 
-    try testing.expect(words.len > 0);
-    try testing.expectEqualStrings("A", words[0]);
-    try testing.expectEqualStrings("Zyzzogeton", words[words.len - 1]);
+    try testing.expect(lines.len > 0);
 
-    for (words) |word| {
-        defer allocator.free(word);
+    for (lines) |line| {
+        defer allocator.free(line);
     }
 }
