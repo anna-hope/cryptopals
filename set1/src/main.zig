@@ -41,9 +41,21 @@ test "hex to base64" {
         hex_len += 1;
     }
 
-    const output = try crypto.hex_to_base64(source[0..hex_len], allocator);
+    const output = try crypto.hexToBase64(source[0..hex_len], allocator);
     defer allocator.free(output);
 
     const expected = "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t";
     try std.testing.expectStringStartsWith(output, expected);
+}
+
+test "fixed xor" {
+    const buf1 = "1c0111001f010100061a024b53535009181c";
+    const buf2 = "686974207468652062756c6c277320657965";
+
+    const allocator = std.testing.allocator;
+    const out = try crypto.fixedXor(buf1, buf2, allocator);
+    defer allocator.free(out);
+
+    const expected = "746865206b696420646f6e277420706c6179";
+    try std.testing.expectStringStartsWith(out, expected);
 }
