@@ -4,6 +4,8 @@ const crypto = @import("crypto.zig");
 pub fn main() !void {
     const input = "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736";
     std.debug.print("{s}\n", .{input});
+    const dict_path = "/usr/share/dict";
+    _ = dict_path;
 
     // stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
