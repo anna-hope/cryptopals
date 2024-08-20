@@ -107,7 +107,7 @@ fn scoreString(string: []const u8, char_frequencies: char_frequency_map) f32 {
     return score / @as(f32, @floatFromInt(string.len));
 }
 
-pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) ![]u8 {
+pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) !struct { output: []u8, key: u8 } {
     var char_frequencies = try getCharFrequencies(allocator, words);
     defer char_frequencies.deinit();
 
@@ -127,6 +127,7 @@ pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) ![
 
     const best_candidate: []u8 = try allocator.alloc(u8, input_bytes_slice.len);
     var best_score: f32 = 0.0;
+    var key: ?u8 = null;
 
     for (alphabet.items) |char| {
         var key_candidate = try std.BoundedArray(u8, 1024).init(0);
@@ -141,10 +142,11 @@ pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) ![
         if (score > best_score) {
             mem.copyForwards(u8, best_candidate, decrypted_candidate);
             best_score = score;
+            key = char;
         }
     }
 
-    return best_candidate;
+    return .{ .output = best_candidate, .key = key.? };
 }
 
 test "hex to base64" {

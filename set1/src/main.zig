@@ -14,7 +14,7 @@ pub fn main() !void {
     const dict_path = "/usr/share/dict/words";
 
     const words = try helpers.readLines(allocator, dict_path);
-    const decrypted_message = try crypto.decryptXordHex(allocator, input, words);
+    const decrypted_output = try crypto.decryptXordHex(allocator, input, words);
 
     // stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
@@ -23,7 +23,7 @@ pub fn main() !void {
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    try stdout.print("{s}\n", .{decrypted_message});
+    try stdout.print("message: {s}, key: {c}\n", .{ decrypted_output.output, decrypted_output.key });
 
     try bw.flush(); // don't forget to flush!
 }
