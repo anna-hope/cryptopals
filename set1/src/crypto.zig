@@ -1,5 +1,6 @@
 const std = @import("std");
 const base64 = std.base64;
+const fmt = std.fmt;
 const fs = std.fs;
 const hash = std.hash;
 const mem = std.mem;
@@ -71,19 +72,6 @@ pub fn fixedXorHex(allocator: Allocator, buf1_hex: []const u8, buf2_hex: []const
     return try bytesToHex(allocator, out_bytes);
 }
 
-fn readLines(allocator: Allocator, file_path: []const u8) ![][]u8 {
-    const file = try fs.openFileAbsolute(file_path, .{});
-    defer file.close();
-
-    const file_reader = file.reader();
-    var words = std.ArrayList([]u8).init(allocator);
-    while (try file_reader.readUntilDelimiterOrEofAlloc(allocator, '\n', 50)) |word| {
-        try words.append(word[0..word.len]);
-    }
-
-    return try words.toOwnedSlice();
-}
-
 fn getCharFrequencies(allocator: Allocator, words: [][]u8) !char_frequency_map {
     var char_counts = std.AutoHashMap(u8, u64).init(allocator);
     defer char_counts.deinit();
@@ -109,27 +97,55 @@ fn getCharFrequencies(allocator: Allocator, words: [][]u8) !char_frequency_map {
     return char_frequencies;
 }
 
-// pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) ![]u8 {
-//     const char_frequencies = try getCharFrequencies(allocator, words);
-//     defer char_frequencies.deinit();
-//
-//     // Get the alphabet to have a list of all the possible characters that could act as the key.
-//     // (Assuming alphabetic ascii.)
-//     const alphabet = std.ArrayList(u8).init(allocator);
-//     defer alphabet.deinit();
-//
-//     var char_freqs_keys_iter = char_frequencies.keyIterator();
-//     while (char_freqs_keys_iter.next()) |char| {
-//         alphabet.append(char.*);
-//     }
-//
-//     for (alphabet.items) |char| {
-//         const key_candidate = try std.BoundedArray(u8, input.len).init(0);
-//         key_candidate.appendNTimesAssumeCapacity(char, input.len);
-//         const key_candidate_hex =
-//         const decrypted_candidate = fixedXor(allocator, input, )
-//     }
-// }
+fn scoreString(string: []const u8, char_frequencies: char_frequency_map) f32 {
+    var score: f32 = 0.0;
+    for (string) |char| {
+        if (char_frequencies.get(char)) |char_freq| {
+            score += char_freq;
+        }
+    }
+    return score / @as(f32, @floatFromInt(string.len));
+}
+
+pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) ![]u8 {
+    var char_frequencies = try getCharFrequencies(allocator, words);
+    defer char_frequencies.deinit();
+
+    // Get the alphabet to have a list of all the possible characters that could act as the key.
+    // (Assuming alphabetic ascii.)
+    var alphabet = std.ArrayList(u8).init(allocator);
+    defer alphabet.deinit();
+
+    var char_freqs_keys_iter = char_frequencies.keyIterator();
+    while (char_freqs_keys_iter.next()) |char| {
+        try alphabet.append(char.*);
+    }
+
+    const input_bytes = try allocator.alloc(u8, input.len);
+    defer allocator.free(input_bytes);
+    const input_bytes_slice = try fmt.hexToBytes(input_bytes, input);
+
+    const best_candidate: []u8 = try allocator.alloc(u8, input.len);
+    var best_score: f32 = 0.0;
+
+    for (alphabet.items) |char| {
+        var key_candidate = try std.BoundedArray(u8, 1024).init(0);
+        key_candidate.appendNTimesAssumeCapacity(char, input_bytes_slice.len);
+        const key_candidate_slice = key_candidate.slice();
+
+        const decrypted_candidate = try fixedXorBytes(allocator, input_bytes_slice, key_candidate_slice);
+        defer allocator.free(decrypted_candidate);
+
+        const score = scoreString(decrypted_candidate, char_frequencies);
+
+        if (score > best_score) {
+            mem.copyForwards(u8, best_candidate, decrypted_candidate);
+            best_score = score;
+        }
+    }
+
+    return best_candidate;
+}
 
 test "hex to base64" {
     const allocator = std.testing.allocator;
@@ -172,22 +188,6 @@ test "fixed xor" {
     const expected = "746865206b696420646f6e277420706c6179";
     try std.testing.expectStringStartsWith(out, expected);
 }
-
-// test "read file" {
-//     const dict_path = "/usr/share/dict/words";
-//     const allocator = testing.allocator;
-//
-//     const words = try readLines(allocator, dict_path);
-//     defer allocator.free(words);
-//
-//     try testing.expect(words.len > 0);
-//     try testing.expectEqualStrings("A", words[0]);
-//     try testing.expectEqualStrings("Zyzzogeton", words[words.len - 1]);
-//
-//     for (words) |word| {
-//         defer allocator.free(word);
-//     }
-// }
 
 test "get character frequencies" {
     const allocator = std.testing.allocator;
