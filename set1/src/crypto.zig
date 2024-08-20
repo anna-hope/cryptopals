@@ -125,7 +125,7 @@ pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) ![
     defer allocator.free(input_bytes);
     const input_bytes_slice = try fmt.hexToBytes(input_bytes, input);
 
-    const best_candidate: []u8 = try allocator.alloc(u8, input.len);
+    const best_candidate: []u8 = try allocator.alloc(u8, input_bytes_slice.len);
     var best_score: f32 = 0.0;
 
     for (alphabet.items) |char| {
