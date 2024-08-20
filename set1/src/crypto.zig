@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 
 const encoder = base64.Base64Encoder.init(base64.standard.alphabet_chars, base64.standard.pad_char);
 
-pub const CryptoError = error {
+pub const CryptoError = error{
     UnequalLengthBuffers,
 };
 
@@ -39,7 +39,6 @@ pub fn fixedXor(buf1_hex: []const u8, buf2_hex: []const u8, allocator: Allocator
         const byte2 = buf2_slice[index];
 
         out_bytes[index] = byte1 ^ byte2;
-
     }
 
     const out = try allocator.alloc(u8, out_bytes.len * 2);
