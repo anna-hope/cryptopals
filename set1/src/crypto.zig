@@ -25,7 +25,34 @@ pub fn hexToBase64(source_hex: []u8, allocator: Allocator) ![]const u8 {
     return out;
 }
 
-pub fn fixedXor(buf1_hex: []const u8, buf2_hex: []const u8, allocator: Allocator) ![]u8 {
+fn bytesToHex(allocator: Allocator, buf_bytes: []const u8) ![]u8 {
+    const out = try allocator.alloc(u8, buf_bytes.len * 2);
+    for (buf_bytes, 0..buf_bytes.len) |byte, index| {
+        const hex_seq: [2]u8 = std.fmt.hex(byte);
+        out[index * 2] = hex_seq[0];
+        out[index * 2 + 1] = hex_seq[1];
+    }
+    return out;
+}
+
+fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8 {
+    if (buf1.len != buf2.len) {
+        return CryptoError.UnequalLengthBuffers;
+    }
+
+    const out = try allocator.alloc(u8, buf1.len);
+
+    for (0..out.len) |index| {
+        const byte1 = buf1[index];
+        const byte2 = buf2[index];
+
+        out[index] = byte1 ^ byte2;
+    }
+
+    return out;
+}
+
+pub fn fixedXorHex(allocator: Allocator, buf1_hex: []const u8, buf2_hex: []const u8) ![]u8 {
     if (buf1_hex.len != buf2_hex.len) {
         return CryptoError.UnequalLengthBuffers;
     }
@@ -38,24 +65,10 @@ pub fn fixedXor(buf1_hex: []const u8, buf2_hex: []const u8, allocator: Allocator
     defer allocator.free(buf2);
     const buf2_slice = try std.fmt.hexToBytes(buf2, buf2_hex);
 
-    const out_bytes = try allocator.alloc(u8, buf1_slice.len);
+    const out_bytes = try fixedXorBytes(allocator, buf1_slice, buf2_slice);
     defer allocator.free(out_bytes);
 
-    for (0..out_bytes.len) |index| {
-        const byte1 = buf1_slice[index];
-        const byte2 = buf2_slice[index];
-
-        out_bytes[index] = byte1 ^ byte2;
-    }
-
-    const out = try allocator.alloc(u8, out_bytes.len * 2);
-    for (out_bytes, 0..out_bytes.len) |byte, index| {
-        const hex_seq: [2]u8 = std.fmt.hex(byte);
-        out[index * 2] = hex_seq[0];
-        out[index * 2 + 1] = hex_seq[1];
-    }
-
-    return out;
+    return try bytesToHex(allocator, out_bytes);
 }
 
 fn readLines(allocator: Allocator, file_path: []const u8) ![][]u8 {
@@ -97,7 +110,25 @@ fn getCharFrequencies(allocator: Allocator, words: [][]u8) !char_frequency_map {
 }
 
 // pub fn decryptXordHex(allocator: Allocator, input: []const u8, words: [][]u8) ![]u8 {
+//     const char_frequencies = try getCharFrequencies(allocator, words);
+//     defer char_frequencies.deinit();
 //
+//     // Get the alphabet to have a list of all the possible characters that could act as the key.
+//     // (Assuming alphabetic ascii.)
+//     const alphabet = std.ArrayList(u8).init(allocator);
+//     defer alphabet.deinit();
+//
+//     var char_freqs_keys_iter = char_frequencies.keyIterator();
+//     while (char_freqs_keys_iter.next()) |char| {
+//         alphabet.append(char.*);
+//     }
+//
+//     for (alphabet.items) |char| {
+//         const key_candidate = try std.BoundedArray(u8, input.len).init(0);
+//         key_candidate.appendNTimesAssumeCapacity(char, input.len);
+//         const key_candidate_hex =
+//         const decrypted_candidate = fixedXor(allocator, input, )
+//     }
 // }
 
 test "hex to base64" {
@@ -135,7 +166,7 @@ test "fixed xor" {
     const buf2 = "686974207468652062756c6c277320657965";
 
     const allocator = std.testing.allocator;
-    const out = try fixedXor(buf1, buf2, allocator);
+    const out = try fixedXorHex(allocator, buf1, buf2);
     defer allocator.free(out);
 
     const expected = "746865206b696420646f6e277420706c6179";
