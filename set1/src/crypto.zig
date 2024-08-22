@@ -18,6 +18,39 @@ pub const CryptoError = error{
     UnequalLengthBuffers,
 };
 
+pub const HexString = struct {
+    const Self = @This();
+    allocator: ?Allocator = null,
+    buf: []const u8,
+
+    pub fn init(allocator: Allocator, raw_bytes: []const u8) !Self {
+        const hex_bytes = try allocator.alloc(u8, raw_bytes.len * 2);
+        for (raw_bytes, 0..raw_bytes.len) |byte, index| {
+            const hex_seq: [2]u8 = std.fmt.hex(byte);
+            hex_bytes[index * 2] = hex_seq[0];
+            hex_bytes[index * 2 + 1] = hex_seq[1];
+        }
+        return Self{ .allocator = allocator, .buf = hex_bytes };
+    }
+
+    /// The input has to be a valid hex-encoded byte buffer, or the behavior will be unexpected.
+    pub fn initFromHex(already_hex: []const u8) Self {
+        return Self{ .buf = already_hex };
+    }
+
+    pub fn deinit(self: *Self) void {
+        if (self.allocator) |allocator| {
+            allocator.free(self.buf);
+        }
+    }
+
+    pub fn decode(self: Self, allocator: Allocator) ![]u8 {
+        const out_bytes = try allocator.alloc(u8, self.buf.len / 2);
+        _ = try std.fmt.hexToBytes(out_bytes, self.buf);
+        return out_bytes;
+    }
+};
+
 pub fn hexToBase64(source_hex: []u8, allocator: Allocator) ![]const u8 {
     const out_bytes = try allocator.alloc(u8, source_hex.len);
     defer allocator.free(out_bytes);
@@ -55,23 +88,21 @@ fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8
     return out;
 }
 
-pub fn fixedXorHex(allocator: Allocator, buf1_hex: []const u8, buf2_hex: []const u8) ![]u8 {
-    if (buf1_hex.len != buf2_hex.len) {
+pub fn fixedXorHex(allocator: Allocator, hex1: HexString, hex2: HexString) !HexString {
+    if (hex1.buf.len != hex2.buf.len) {
         return CryptoError.UnequalLengthBuffers;
     }
 
-    const buf1 = try allocator.alloc(u8, buf1_hex.len);
+    const buf1 = try hex1.decode(allocator);
     defer allocator.free(buf1);
-    const buf1_slice = try std.fmt.hexToBytes(buf1, buf1_hex);
 
-    const buf2 = try allocator.alloc(u8, buf2_hex.len);
+    const buf2 = try hex2.decode(allocator);
     defer allocator.free(buf2);
-    const buf2_slice = try std.fmt.hexToBytes(buf2, buf2_hex);
 
-    const out_bytes = try fixedXorBytes(allocator, buf1_slice, buf2_slice);
+    const out_bytes = try fixedXorBytes(allocator, buf1, buf2);
     defer allocator.free(out_bytes);
 
-    return try bytesToHex(allocator, out_bytes);
+    return try HexString.init(allocator, out_bytes);
 }
 
 pub fn getCharFrequencies(allocator: Allocator, words: [][]u8) !char_frequency_map {
@@ -115,7 +146,7 @@ pub const DecryptedOutput = struct {
     score: f32,
 };
 
-pub fn decryptXordHex(allocator: Allocator, input: []const u8, char_frequencies: char_frequency_map) !DecryptedOutput {
+pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: char_frequency_map) !DecryptedOutput {
     // Get the alphabet to have a list of all the possible characters that could act as the key.
     // (Assuming alphabetic ascii.)
     var alphabet = std.ArrayList(u8).init(allocator);
@@ -125,20 +156,19 @@ pub fn decryptXordHex(allocator: Allocator, input: []const u8, char_frequencies:
         try alphabet.append(char);
     }
 
-    const input_bytes = try allocator.alloc(u8, input.len);
+    const input_bytes = try input.decode(allocator);
     defer allocator.free(input_bytes);
-    const input_bytes_slice = try fmt.hexToBytes(input_bytes, input);
 
-    const best_candidate: []u8 = try allocator.alloc(u8, input_bytes_slice.len);
+    const best_candidate: []u8 = try allocator.alloc(u8, input_bytes.len);
     var best_score: f32 = 0.0;
     var key: ?u8 = null;
 
     for (alphabet.items) |char| {
         var key_candidate = try std.BoundedArray(u8, 1024).init(0);
-        key_candidate.appendNTimesAssumeCapacity(char, input_bytes_slice.len);
+        key_candidate.appendNTimesAssumeCapacity(char, input_bytes.len);
         const key_candidate_slice = key_candidate.slice();
 
-        const decrypted_candidate = try fixedXorBytes(allocator, input_bytes_slice, key_candidate_slice);
+        const decrypted_candidate = try fixedXorBytes(allocator, input_bytes, key_candidate_slice);
         defer allocator.free(decrypted_candidate);
 
         const score = scoreString(decrypted_candidate, char_frequencies);
@@ -152,6 +182,10 @@ pub fn decryptXordHex(allocator: Allocator, input: []const u8, char_frequencies:
 
     return DecryptedOutput{ .output = best_candidate, .key = key.?, .score = best_score };
 }
+
+// fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) ![]u8 {
+//     const raw_output = try allocator.alloc(u8, input.len);
+// }
 
 test "hex to base64" {
     const allocator = std.testing.allocator;
@@ -184,15 +218,15 @@ test "hex to base64" {
 }
 
 test "fixed xor" {
-    const buf1 = "1c0111001f010100061a024b53535009181c";
-    const buf2 = "686974207468652062756c6c277320657965";
+    const buf1 = HexString.initFromHex("1c0111001f010100061a024b53535009181c");
+    const buf2 = HexString.initFromHex("686974207468652062756c6c277320657965");
 
     const allocator = std.testing.allocator;
-    const out = try fixedXorHex(allocator, buf1, buf2);
-    defer allocator.free(out);
+    var out = try fixedXorHex(allocator, buf1, buf2);
+    defer out.deinit();
 
     const expected = "746865206b696420646f6e277420706c6179";
-    try std.testing.expectStringStartsWith(out, expected);
+    try std.testing.expectStringStartsWith(out.buf, expected);
 }
 
 test "get character frequencies" {
@@ -227,7 +261,7 @@ test "decrypt XOR'd hex" {
     const dict_path = "/usr/share/dict/words";
     const helpers = @import("helpers.zig");
 
-    const input = "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736";
+    const input = HexString.initFromHex("1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736");
 
     const words = try helpers.readLines(allocator, dict_path);
     defer allocator.free(words);
@@ -243,4 +277,14 @@ test "decrypt XOR'd hex" {
     for (words) |word| {
         defer allocator.free(word);
     }
+}
+
+test "repeating-key XOR" {
+    const text = "Burning 'em, if you ain't quick and nimble\nI go crazy when I hear a cymbal";
+    _ = text;
+    const expected = "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272\na282b2f20430a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f";
+    _ = expected;
+
+    const allocator = testing.allocator;
+    _ = allocator;
 }
