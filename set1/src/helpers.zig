@@ -4,8 +4,8 @@ const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 
-pub fn readLines(allocator: Allocator, file_path: []const u8) ![][]u8 {
-    const file = try fs.openFileAbsolute(file_path, .{});
+pub fn readLines(allocator: Allocator, dir: fs.Dir, relative_path: []const u8) ![][]u8 {
+    const file = try dir.openFile(relative_path, .{});
     defer file.close();
 
     const file_reader = file.reader();
@@ -17,11 +17,11 @@ pub fn readLines(allocator: Allocator, file_path: []const u8) ![][]u8 {
     return try words.toOwnedSlice();
 }
 
-test "read file" {
-    const path = "/Users/annahope/projects/rc/cryptopals/set1/data/4.txt";
+test "fast read file lines" {
+    const path = "data/4.txt";
     const allocator = testing.allocator;
 
-    const lines = try readLines(allocator, path);
+    const lines = try readLines(allocator, fs.cwd(), path);
     defer allocator.free(lines);
 
     try testing.expect(lines.len > 0);
