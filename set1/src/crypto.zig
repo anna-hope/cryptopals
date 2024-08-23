@@ -1,4 +1,6 @@
 const std = @import("std");
+const string_utils = @import("string_utils.zig");
+
 const base64 = std.base64;
 const fmt = std.fmt;
 const fs = std.fs;
@@ -6,9 +8,9 @@ const hash = std.hash;
 const mem = std.mem;
 const testing = std.testing;
 
-const string_utils = @import("string_utils.zig");
-
 const Allocator = std.mem.Allocator;
+
+const HexString = string_utils.HexString;
 
 pub const CryptoError = error{
     UnequalLengthBuffers,
@@ -54,7 +56,7 @@ pub const DecryptedOutput = struct {
     score: f32,
 };
 
-pub fn decryptXordHex(allocator: Allocator, input: string_utils.HexString, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
+pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
     // Get the alphabet to have a list of all the possible characters that could act as the key.
     // (Assuming alphabetic ascii.)
     var alphabet = std.ArrayList(u8).init(allocator);
@@ -91,7 +93,7 @@ pub fn decryptXordHex(allocator: Allocator, input: string_utils.HexString, char_
     return DecryptedOutput{ .output = best_candidate, .key = key.?, .score = best_score };
 }
 
-pub fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) !string_utils.HexString {
+pub fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) !HexString {
     const raw_output = try allocator.alloc(u8, input.len);
     defer allocator.free(raw_output);
 
@@ -108,12 +110,12 @@ pub fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []co
         );
     }
 
-    return try string_utils.HexString.init(allocator, raw_output);
+    return try HexString.init(allocator, raw_output);
 }
 
 test "fast fixed xor" {
-    const buf1 = string_utils.HexString.initFromHex("1c0111001f010100061a024b53535009181c");
-    const buf2 = string_utils.HexString.initFromHex("686974207468652062756c6c277320657965");
+    const buf1 = HexString.initFromHex("1c0111001f010100061a024b53535009181c");
+    const buf2 = HexString.initFromHex("686974207468652062756c6c277320657965");
 
     const allocator = std.testing.allocator;
     var out = try fixedXorHex(allocator, buf1, buf2);
@@ -128,9 +130,10 @@ test "decrypt XOR'd hex" {
     const dict_path = "/usr/share/dict/words";
     const helpers = @import("helpers.zig");
 
-    const input = string_utils.HexString.initFromHex("1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736");
+    const input = HexString.initFromHex("1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736");
 
-    const words = try helpers.readLines(allocator, dict_path);
+    const root = try std.fs.openDirAbsolute("/", .{});
+    const words = try helpers.readLines(allocator, root, dict_path);
     defer allocator.free(words);
     var char_frequencies = try string_utils.getCharFrequencies(allocator, words);
     defer char_frequencies.deinit();

@@ -4,7 +4,7 @@ const fmt = std.fmt;
 
 const Allocator = std.mem.Allocator;
 
-const alphabet_chars = base64.standard_alphabet_chars;
+pub const alphabet_chars = base64.standard_alphabet_chars;
 pub const char_frequency_map = std.AutoHashMap(u8, f32);
 
 // TODO: Make into tagged union to deal with managed (newly allocated) vs unmanaged case
@@ -99,7 +99,7 @@ pub fn getCharFrequencies(allocator: Allocator, words: [][]u8) !char_frequency_m
     return char_frequencies;
 }
 
-fn scoreString(string: []const u8, char_frequencies: char_frequency_map) f32 {
+pub fn scoreString(string: []const u8, char_frequencies: char_frequency_map) f32 {
     var score: f32 = 0.0;
     for (string) |char| {
         if (char_frequencies.get(char)) |char_freq| {
