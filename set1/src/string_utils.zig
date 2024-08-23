@@ -4,10 +4,11 @@ const fmt = std.fmt;
 
 const Allocator = std.mem.Allocator;
 
-const alphabet_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const alphabet_chars = base64.standard_alphabet_chars;
 pub const char_frequency_map = std.AutoHashMap(u8, f32);
-const encoder = base64.Base64Encoder.init(base64.standard.alphabet_chars, base64.standard.pad_char);
 
+// TODO: Make into tagged union to deal with managed (newly allocated) vs unmanaged case
+// TODO: So that we don't always need to take an allocator in decode
 pub const HexString = struct {
     const Self = @This();
     allocator: ?Allocator = null,
@@ -36,19 +37,41 @@ pub const HexString = struct {
 
     pub fn decode(self: Self, allocator: Allocator) ![]u8 {
         const out_bytes = try allocator.alloc(u8, self.buf.len / 2);
-        _ = try std.fmt.hexToBytes(out_bytes, self.buf);
+        const decoded = try std.fmt.hexToBytes(out_bytes, self.buf);
+        std.debug.assert(decoded.len == out_bytes.len);
         return out_bytes;
     }
 };
 
-pub fn hexToBase64(allocator: Allocator, source: HexString) ![]const u8 {
-    const out_bytes = try allocator.alloc(u8, source.buf.len);
-    defer allocator.free(out_bytes);
-    const out_bytes_decoded = try fmt.hexToBytes(out_bytes, source.buf);
+pub const Base64String = struct {
+    const Self = @This();
+    allocator: ?Allocator = null,
+    buf: []const u8,
 
-    const dest = try allocator.alloc(u8, encoder.calcSize(out_bytes_decoded.len));
-    const out = encoder.encode(dest, out_bytes_decoded);
-    return out;
+    pub fn init(allocator: Allocator, raw_bytes: []const u8) !Self {
+        const encoder = base64.Base64Encoder.init(base64.standard.alphabet_chars, base64.standard.pad_char);
+        const buf = try allocator.alloc(u8, encoder.calcSize(raw_bytes.len));
+        const out = encoder.encode(buf, raw_bytes);
+        std.debug.assert(out.len == buf.len);
+
+        return Self{ .allocator = allocator, .buf = buf };
+    }
+
+    pub fn initFromBase64(buf: []const u8) Self {
+        return Self{ .buf = buf };
+    }
+
+    pub fn deinit(self: *Self) void {
+        if (self.allocator) |allocator| {
+            allocator.free(self.buf);
+        }
+    }
+};
+
+pub fn hexToBase64(allocator: Allocator, source: HexString) !Base64String {
+    const source_raw = try source.decode(allocator);
+    defer allocator.free(source_raw);
+    return try Base64String.init(allocator, source_raw);
 }
 
 pub fn getCharFrequencies(allocator: Allocator, words: [][]u8) !char_frequency_map {
@@ -90,25 +113,9 @@ test "fast hex to base64" {
     const allocator = std.testing.allocator;
     const input = HexString.initFromHex("49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f6e6f7573206d757368726f6f6d");
 
-    var hex_len: usize = 0;
-    while (hex_len < input.buf.len) {
-        var current_char_is_hex = false;
-        for (std.fmt.hex_charset) |char| {
-            if (input.buf[hex_len] == char) {
-                current_char_is_hex = true;
-            }
-        }
-
-        if (!current_char_is_hex) {
-            break;
-        }
-
-        hex_len += 1;
-    }
-
-    const output = try hexToBase64(allocator, input);
-    defer allocator.free(output);
+    var output = try hexToBase64(allocator, input);
+    defer output.deinit();
 
     const expected = "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t";
-    try std.testing.expectStringStartsWith(output, expected);
+    try std.testing.expectEqualStrings(expected, output.buf);
 }
