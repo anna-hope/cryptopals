@@ -61,16 +61,6 @@ pub fn hexToBase64(source_hex: []u8, allocator: Allocator) ![]const u8 {
     return out;
 }
 
-fn bytesToHex(allocator: Allocator, buf_bytes: []const u8) ![]u8 {
-    const out = try allocator.alloc(u8, buf_bytes.len * 2);
-    for (buf_bytes, 0..buf_bytes.len) |byte, index| {
-        const hex_seq: [2]u8 = std.fmt.hex(byte);
-        out[index * 2] = hex_seq[0];
-        out[index * 2 + 1] = hex_seq[1];
-    }
-    return out;
-}
-
 fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8 {
     if (buf1.len != buf2.len) {
         return CryptoError.UnequalLengthBuffers;
@@ -183,11 +173,27 @@ pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: 
     return DecryptedOutput{ .output = best_candidate, .key = key.?, .score = best_score };
 }
 
-// fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) ![]u8 {
-//     const raw_output = try allocator.alloc(u8, input.len);
-// }
+fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) !HexString {
+    const raw_output = try allocator.alloc(u8, input.len);
+    defer allocator.free(raw_output);
 
-test "hex to base64" {
+    for (input, 0..input.len) |input_byte, index| {
+        const key_byte = key[index % key.len];
+        const encrypted_input_byte = try fixedXorBytes(allocator, &[_]u8{input_byte}, &[_]u8{key_byte});
+        defer allocator.free(encrypted_input_byte);
+
+        // Copy the byte so we can free the encrypted_input_byte array
+        mem.copyForwards(
+            u8,
+            raw_output[index .. index + 1],
+            encrypted_input_byte,
+        );
+    }
+
+    return try HexString.init(allocator, raw_output);
+}
+
+test "fast hex to base64" {
     const allocator = std.testing.allocator;
     const source = try allocator.alloc(u8, 100);
     defer allocator.free(source);
@@ -217,7 +223,7 @@ test "hex to base64" {
     try std.testing.expectStringStartsWith(output, expected);
 }
 
-test "fixed xor" {
+test "fast fixed xor" {
     const buf1 = HexString.initFromHex("1c0111001f010100061a024b53535009181c");
     const buf2 = HexString.initFromHex("686974207468652062756c6c277320657965");
 
@@ -229,7 +235,7 @@ test "fixed xor" {
     try std.testing.expectStringStartsWith(out.buf, expected);
 }
 
-test "get character frequencies" {
+test "fast get character frequencies" {
     const allocator = std.testing.allocator;
     var words = std.ArrayList([]u8).init(allocator);
     for (0..3) |_| {
@@ -279,12 +285,15 @@ test "decrypt XOR'd hex" {
     }
 }
 
-test "repeating-key XOR" {
-    const text = "Burning 'em, if you ain't quick and nimble\nI go crazy when I hear a cymbal";
-    _ = text;
-    const expected = "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272\na282b2f20430a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f";
-    _ = expected;
-
+test "fast repeating-key XOR" {
     const allocator = testing.allocator;
-    _ = allocator;
+    const input = "Burning 'em, if you ain't quick and nimble\nI go crazy when I hear a cymbal";
+
+    const expected = "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f";
+
+    const key = "ICE";
+    var output = try encryptRepeatingKeyXor(allocator, input, key);
+    defer output.deinit();
+
+    try testing.expectEqualStrings(expected, output.buf);
 }
