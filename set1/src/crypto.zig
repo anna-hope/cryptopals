@@ -173,7 +173,7 @@ pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: 
     return DecryptedOutput{ .output = best_candidate, .key = key.?, .score = best_score };
 }
 
-fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) !HexString {
+pub fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) !HexString {
     const raw_output = try allocator.alloc(u8, input.len);
     defer allocator.free(raw_output);
 
