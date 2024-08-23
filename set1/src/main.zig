@@ -30,7 +30,8 @@ pub fn main() !void {
     var best_index: usize = 0;
 
     for (inputs, 0..inputs.len) |input, index| {
-        const output = try crypto.decryptXordHex(allocator, input, char_freqs);
+        const input_hex = crypto.HexString.initFromHex(input);
+        const output = try crypto.decryptXordHex(allocator, input_hex, char_freqs);
         if (final_output) |fo| {
             if (output.score > fo.score) {
                 final_output = output;
