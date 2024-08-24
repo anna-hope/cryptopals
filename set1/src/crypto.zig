@@ -5,15 +5,18 @@ const base64 = std.base64;
 const fmt = std.fmt;
 const fs = std.fs;
 const hash = std.hash;
+const math = std.math;
 const mem = std.mem;
 const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 
 const HexString = string_utils.HexString;
+const Base64String = string_utils.Base64String;
 
 pub const CryptoError = error{
     UnequalLengthBuffers,
+    BufferTooShort,
 };
 
 fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8 {
@@ -113,6 +116,47 @@ pub fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []co
     return try HexString.init(allocator, raw_output);
 }
 
+fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
+    if (chunk_len * 2 > input.len) {
+        return CryptoError.BufferTooShort;
+    }
+
+    const first_chunk = input[0..chunk_len];
+    const second_chunk = input[chunk_len .. chunk_len * 2];
+    const distance = try string_utils.computeHammingDistance(first_chunk, second_chunk);
+    return @as(f32, @floatFromInt(distance)) / @as(f32, @floatFromInt(chunk_len));
+}
+
+const KeySize = struct {
+    len: usize,
+    distance: f32,
+
+    fn getSmallerDistance(_: void, a: KeySize, b: KeySize) math.Order {
+        return math.order(a.distance, b.distance);
+    }
+};
+
+pub fn breakRepeatingKeyXor(allocator: Allocator, input: []const u8, min_key_len: usize, max_key_len: usize) ![]u8 {
+    const out = try allocator.alloc(u8, input.len);
+
+    var queue = std.PriorityDequeue(KeySize, void, KeySize.getSmallerDistance).init(allocator, {});
+    defer queue.deinit();
+
+    for (min_key_len..max_key_len + 1) |key_size| {
+        const distance = try getNormalizedChunkEditDistance(input, key_size);
+        try queue.add(KeySize{ .distance = distance, .len = key_size });
+    }
+
+    const num_key_sizes: usize = 3;
+    var smallest_distance_keys = try std.BoundedArray(KeySize, num_key_sizes).init(0);
+    for (0..num_key_sizes) |_| {
+        smallest_distance_keys.append(queue.removeMin()) catch unreachable;
+    }
+    std.debug.print("{any}\n", .{smallest_distance_keys});
+
+    return out;
+}
+
 test "fast fixed xor" {
     const buf1 = HexString.initFromHex("1c0111001f010100061a024b53535009181c");
     const buf2 = HexString.initFromHex("686974207468652062756c6c277320657965");
@@ -187,4 +231,26 @@ test "fast get character frequencies" {
     for (words_slice) |word| {
         defer allocator.free(word);
     }
+}
+
+test "fast get normalized edit distance for chunks" {
+    const input1 = "aaaaaa";
+    const normalized_distance1 = try getNormalizedChunkEditDistance(input1, 3);
+    try testing.expectApproxEqAbs(0.0, normalized_distance1, 1e-5);
+
+    const input2 = "aaabbb";
+    const normalized_distance2 = try getNormalizedChunkEditDistance(input2, 3);
+    try testing.expectApproxEqAbs(2.0, normalized_distance2, 1e-5);
+}
+
+test "break repeating-key XOR" {
+    const allocator = testing.allocator;
+    const test_filename = "data/pride_prejudice_jane.txt";
+
+    const cwd = fs.cwd();
+    const input = try cwd.readFileAlloc(allocator, test_filename, 1024 * 10);
+    defer allocator.free(input);
+
+    const decrypted = try breakRepeatingKeyXor(allocator, input, 2, 10);
+    defer allocator.free(decrypted);
 }
