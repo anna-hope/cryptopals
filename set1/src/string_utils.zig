@@ -9,6 +9,10 @@ const Allocator = std.mem.Allocator;
 pub const alphabet_chars = base64.standard_alphabet_chars;
 pub const char_frequency_map = std.AutoHashMap(u8, f32);
 
+const StringUtilsError = error{
+    UnequalLengthBuffers,
+};
+
 // TODO: Make into tagged union to deal with managed (newly allocated) vs unmanaged case
 // TODO: So that we don't always need to take an allocator in decode
 pub const HexString = struct {
@@ -111,44 +115,16 @@ pub fn scoreString(string: []const u8, char_frequencies: char_frequency_map) f32
     return score / @as(f32, @floatFromInt(string.len));
 }
 
-fn sortBytes(buf: []u8) void {
-    const compare = std.sort.asc(u8);
-    std.sort.heap(u8, buf, {}, compare);
-}
-
-fn u8toBitArray(byte: u8) [8]u2 {
-    var out = [_]u2{0} ** 8;
-    var remains = byte;
-    var index: u8 = 7;
-    while (remains > 0) {
-        const remainder = remains % 2;
-        remains /= 2;
-        out[index] = @intCast(remainder);
-        index -= 1;
+pub fn computeHammingDistance(buf1: []const u8, buf2: []const u8) !usize {
+    if (buf1.len != buf2.len) {
+        return StringUtilsError.UnequalLengthBuffers;
     }
-
-    return out;
-}
-
-pub fn computeHammingDistance(buf1: []const u8, buf2: []const u8) usize {
-    // var longer: []const u8 = undefined;
-    // var shorter: []const u8 = undefined;
-    //
-    // if (buf1.len > buf2.len) {
-    //     longer = buf1;
-    //     shorter = buf2;
-    // } else {
-    //     longer = buf2;
-    //     shorter = buf1;
-    // }
 
     var distance: usize = 0;
 
     for (buf1, buf2) |byte1, byte2| {
-        const difference = u8toBitArray(byte1 ^ byte2);
-        for (difference) |bit| {
-            distance += @intCast(bit);
-        }
+        const bit_difference = @popCount(byte1 ^ byte2);
+        distance += bit_difference;
     }
     return distance;
 }
@@ -171,13 +147,6 @@ test "fast hex to base64" {
 //     sortBytes(string);
 //     try testing.expectEqualStrings("Zgi", string);
 // }
-
-test "u8 to bit array" {
-    const input: u8 = 5;
-    const bits = u8toBitArray(input);
-    const expected = [_]u2{ 0, 0, 0, 0, 0, 1, 0, 1 };
-    try testing.expectEqual(expected, bits);
-}
 
 test "fast hamming distance" {
     const input1 = "this is a test";
