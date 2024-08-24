@@ -140,14 +140,6 @@ test "fast hex to base64" {
     try std.testing.expectEqualStrings(expected, output.buf);
 }
 
-// test "sort bytes" {
-//     const string = "Zig";
-//     const allocator = testing.allocator;
-//
-//     sortBytes(string);
-//     try testing.expectEqualStrings("Zgi", string);
-// }
-
 test "fast hamming distance" {
     const input1 = "this is a test";
     const input2 = "wokka wokka!!!";
