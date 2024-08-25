@@ -136,6 +136,78 @@ const KeySize = struct {
     }
 };
 
+const InputBlocks = struct {
+    const Self = @This();
+    allocator: Allocator,
+    num_blocks: usize,
+    block_size: usize,
+    data: []u8,
+
+    fn init(allocator: Allocator, input_size: usize, block_size: usize) !Self {
+        const num_blocks = input_size / block_size;
+        const blocks = try allocator.alloc(u8, input_size);
+        return Self{ .allocator = allocator, .num_blocks = num_blocks, .block_size = block_size, .data = blocks };
+    }
+
+    fn deinit(self: *Self) void {
+        self.allocator.free(self.data);
+    }
+
+    fn setByteAtBlock(self: *Self, block_index: usize, byte_index: usize, byte: u8) void {
+        const raw_byte_index = self.block_size * block_index + byte_index;
+        self.data[raw_byte_index] = byte;
+    }
+
+    fn getBlockStartEnd(self: Self, block_index: usize) struct { start: usize, end: usize } {
+        const block_start = block_index * self.block_size;
+        const block_end = block_start + self.block_size;
+        return .{ .start = block_start, .end = block_end };
+    }
+
+    fn getBlock(self: Self, block_index: usize) []const u8 {
+        const block_range = self.getBlockStartEnd(block_index);
+        return self.data[block_range.start..block_range.end];
+    }
+
+    fn iter(self: Self) BlockIterator {
+        return BlockIterator.init(self);
+    }
+};
+
+const BlockIterator = struct {
+    const Self = @This();
+    current_index: usize = 0,
+    blocks: InputBlocks,
+
+    fn init(blocks: InputBlocks) Self {
+        return Self{ .blocks = blocks };
+    }
+
+    fn next(self: *Self) ?[]const u8 {
+        if (self.current_index > self.blocks.num_blocks) {
+            return null;
+        }
+
+        const block = self.blocks.getBlock(self.current_index);
+        self.current_index += 1;
+        return block;
+    }
+};
+
+fn makeAndTransposeBlocks(allocator: Allocator, input: []const u8, block_size: usize) !InputBlocks {
+    var input_blocks = try InputBlocks.init(allocator, input.len, block_size);
+
+    // for (0..input_blocks.num_blocks) |block_index| {
+    //     const block_range = input_blocks.getBlockStartEnd(block_index);
+    //     const input_block = input[block_range.start..block_range.end];
+    //     for (input_block, 0..input_block.len) |byte, byte_index| {
+    //         input_blocks.setByteAtBlock(, byte_index, byte);
+    //     }
+    // }
+
+    return input_blocks;
+}
+
 pub fn breakRepeatingKeyXor(allocator: Allocator, input: []const u8, min_key_len: usize, max_key_len: usize) ![]u8 {
     const out = try allocator.alloc(u8, input.len);
 
@@ -147,9 +219,11 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: []const u8, min_key_len
         try queue.add(KeySize{ .distance = distance, .len = key_size });
     }
 
-    const num_key_sizes: usize = 3;
-    var smallest_distance_keys = try std.BoundedArray(KeySize, num_key_sizes).init(0);
+    const max_num_key_sizes = 3;
+    const num_key_sizes: usize = @min(queue.len, max_num_key_sizes);
+    var smallest_distance_keys = try std.BoundedArray(KeySize, max_num_key_sizes).init(0);
     for (0..num_key_sizes) |_| {
+        // We know the array is large enough and the queue has enough elements
         smallest_distance_keys.append(queue.removeMin()) catch unreachable;
     }
     std.debug.print("{any}\n", .{smallest_distance_keys});
@@ -243,7 +317,7 @@ test "fast get normalized edit distance for chunks" {
     try testing.expectApproxEqAbs(2.0, normalized_distance2, 1e-5);
 }
 
-test "break repeating-key XOR" {
+test "fast break repeating-key XOR" {
     const allocator = testing.allocator;
     const test_filename = "data/pride_prejudice_jane.txt";
 
@@ -253,4 +327,19 @@ test "break repeating-key XOR" {
 
     const decrypted = try breakRepeatingKeyXor(allocator, input, 2, 10);
     defer allocator.free(decrypted);
+}
+
+test "fast make and transpose blocks" {
+    const allocator = testing.allocator;
+    const test_input = "aaaabbbbccccdddd";
+
+    const block_size: usize = 4;
+    var transposed_blocks = try makeAndTransposeBlocks(allocator, test_input, block_size);
+    defer transposed_blocks.deinit();
+    var block_iterator = transposed_blocks.iter();
+
+    const expected_block = "abcd";
+    while (block_iterator.next()) |block| {
+        try testing.expectEqualStrings(expected_block, block);
+    }
 }
