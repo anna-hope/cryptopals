@@ -72,6 +72,14 @@ pub const Base64String = struct {
             allocator.free(self.buf);
         }
     }
+
+    pub fn decode(self: Self, allocator: Allocator) ![]u8 {
+        const decoder = base64.Base64Decoder.init(base64.standard.alphabet_chars, base64.standard.pad_char);
+        const output_size = try decoder.calcSizeForSlice(self.buf);
+        const out = try allocator.alloc(u8, output_size);
+        try decoder.decode(out, self.buf);
+        return out;
+    }
 };
 
 pub fn hexToBase64(allocator: Allocator, source: HexString) !Base64String {
