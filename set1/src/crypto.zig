@@ -53,13 +53,22 @@ pub fn fixedXorHex(allocator: Allocator, hex1: HexString, hex2: HexString) !HexS
     return try HexString.init(allocator, out_bytes);
 }
 
+fn decryptXordSingleByteKey(allocator: Allocator, input: []const u8, key_byte: u8) ![]u8 {
+    var key_candidate = try std.BoundedArray(u8, 1024).init(0);
+    key_candidate.appendNTimesAssumeCapacity(key_byte, input.len);
+    const key_candidate_slice = key_candidate.slice();
+
+    const decrypted_candidate = try fixedXorBytes(allocator, input, key_candidate_slice);
+    return decrypted_candidate;
+}
+
 pub const DecryptedOutput = struct {
     output: []u8,
     key: u8,
     score: f32,
 };
 
-pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
+fn decryptXordBytes(allocator: Allocator, input: []const u8, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
     // Get the alphabet to have a list of all the possible characters that could act as the key.
     // (Assuming alphabetic ascii.)
     var alphabet = std.ArrayList(u8).init(allocator);
@@ -69,19 +78,12 @@ pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: 
         try alphabet.append(char);
     }
 
-    const input_bytes = try input.decode(allocator);
-    defer allocator.free(input_bytes);
-
-    const best_candidate: []u8 = try allocator.alloc(u8, input_bytes.len);
+    const best_candidate: []u8 = try allocator.alloc(u8, input.len);
     var best_score: f32 = 0.0;
     var key: ?u8 = null;
 
     for (alphabet.items) |char| {
-        var key_candidate = try std.BoundedArray(u8, 1024).init(0);
-        key_candidate.appendNTimesAssumeCapacity(char, input_bytes.len);
-        const key_candidate_slice = key_candidate.slice();
-
-        const decrypted_candidate = try fixedXorBytes(allocator, input_bytes, key_candidate_slice);
+        const decrypted_candidate = try decryptXordSingleByteKey(allocator, input, char);
         defer allocator.free(decrypted_candidate);
 
         const score = string_utils.scoreString(decrypted_candidate, char_frequencies);
@@ -94,6 +96,12 @@ pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: 
     }
 
     return DecryptedOutput{ .output = best_candidate, .key = key.?, .score = best_score };
+}
+
+pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
+    const input_bytes = try input.decode(allocator);
+    defer allocator.free(input_bytes);
+    return decryptXordBytes(allocator, input_bytes, char_frequencies);
 }
 
 pub fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) !HexString {
@@ -136,37 +144,126 @@ const KeySize = struct {
     }
 };
 
+const SpecialBlockPlace = enum {
+    Start,
+    End,
+};
+
 const InputBlocks = struct {
     const Self = @This();
     allocator: Allocator,
     num_blocks: usize,
     block_size: usize,
+    special_block_size: usize,
     data: []u8,
 
-    fn init(allocator: Allocator, input_size: usize, block_size: usize) !Self {
-        const num_blocks = input_size / block_size;
-        const blocks = try allocator.alloc(u8, input_size);
-        return Self{ .allocator = allocator, .num_blocks = num_blocks, .block_size = block_size, .data = blocks };
+    fn init(allocator: Allocator, input_len: usize, block_size: usize, special_block_place: ?SpecialBlockPlace) !Self {
+        var num_blocks = input_len / block_size;
+
+        // In case we can't cleanly divide input_size by block_size,
+        // and need a "special" differently-sized block at start or end
+        const leftover_bytes: usize = input_len - num_blocks * block_size;
+        var special_block_size: usize = 0;
+        if (leftover_bytes > 0) {
+            switch (special_block_place.?) {
+                SpecialBlockPlace.Start => {
+                    special_block_size = block_size + leftover_bytes;
+                },
+                SpecialBlockPlace.End => {
+                    special_block_size = leftover_bytes;
+                    num_blocks += 1;
+                },
+            }
+        }
+
+        const blocks = try allocator.alloc(u8, input_len);
+        return Self{ .allocator = allocator, .num_blocks = num_blocks, .block_size = block_size, .special_block_size = special_block_size, .data = blocks };
+    }
+
+    fn initWithData(allocator: Allocator, input: []const u8, block_size: usize) !Self {
+        var self = try Self.init(allocator, input.len, block_size, SpecialBlockPlace.End);
+        self.makeBlocks(input);
+        return self;
+    }
+
+    fn makeBlocks(self: *Self, input: []const u8) void {
+        for (0..self.num_blocks) |block_index| {
+            const block_range = self.getBlockStartEnd(block_index);
+            mem.copyBackwards(u8, self.data[block_range.start..block_range.end], input[block_range.start..block_range.end]);
+        }
     }
 
     fn deinit(self: *Self) void {
         self.allocator.free(self.data);
     }
 
-    fn setByteAtBlock(self: *Self, block_index: usize, byte_index: usize, byte: u8) void {
-        const raw_byte_index = self.block_size * block_index + byte_index;
-        self.data[raw_byte_index] = byte;
+    fn getSpecialBlockIndex(self: Self) ?usize {
+        if (self.special_block_size > self.block_size) {
+            // If the special block is larger than regular ones, it's at the beginning.
+            return 0;
+        } else if (self.special_block_size > 0 and self.special_block_size < self.block_size) {
+            // Otherwise, it's at the end (because it's shorter than regular blocks)
+            return self.num_blocks - 1;
+        }
+
+        // Or we don't have a special block at all
+        return null;
     }
 
     fn getBlockStartEnd(self: Self, block_index: usize) struct { start: usize, end: usize } {
-        const block_start = block_index * self.block_size;
-        const block_end = block_start + self.block_size;
+        const block_size = if (self.special_block_size > 0 and block_index == self.getSpecialBlockIndex().?) blk: {
+            break :blk self.special_block_size;
+        } else blk: {
+            break :blk self.block_size;
+        };
+
+        var block_start = block_index * self.block_size;
+        if (block_size < self.special_block_size) {
+            // We have a special block at the beginning (and we are not inside it),
+            // (because the size of the current block is shorter than the size of the special block)
+            // so we need to offset the current block_start by the size of the special block.
+            block_start += self.special_block_size - block_size;
+        }
+
+        const block_end = block_start + block_size;
         return .{ .start = block_start, .end = block_end };
     }
 
     fn getBlock(self: Self, block_index: usize) []const u8 {
         const block_range = self.getBlockStartEnd(block_index);
         return self.data[block_range.start..block_range.end];
+    }
+
+    fn setByteAtIndex(self: *Self, block_index: usize, byte_index: usize, byte: u8) void {
+        const block_start = self.getBlockStartEnd(block_index).start;
+        self.data[block_start + byte_index] = byte;
+    }
+
+    fn transpose(self: Self) !Self {
+        var new_special_block_place: ?SpecialBlockPlace = null;
+        var new_block_size = self.num_blocks;
+        if (self.getSpecialBlockIndex()) |special_block_index| {
+            if (special_block_index + 1 == self.num_blocks) {
+                // If it's currently at the end, the transposed blocks should have it at the start.
+                new_special_block_place = SpecialBlockPlace.Start;
+            } else {
+                // ... and vice versa
+                new_special_block_place = SpecialBlockPlace.End;
+            }
+            // Don't count the special block for new block size
+            new_block_size -= 1;
+        }
+
+        var transposed = try Self.init(self.allocator, self.data.len, new_block_size, new_special_block_place);
+
+        for (0..self.num_blocks) |block_index| {
+            const block = self.getBlock(block_index);
+            for (block, 0..block.len) |byte, byte_index| {
+                transposed.setByteAtIndex(byte_index, block_index, byte);
+            }
+        }
+
+        return transposed;
     }
 
     fn iter(self: Self) BlockIterator {
@@ -184,7 +281,7 @@ const BlockIterator = struct {
     }
 
     fn next(self: *Self) ?[]const u8 {
-        if (self.current_index > self.blocks.num_blocks) {
+        if (self.current_index >= self.blocks.num_blocks) {
             return null;
         }
 
@@ -194,21 +291,88 @@ const BlockIterator = struct {
     }
 };
 
-fn makeAndTransposeBlocks(allocator: Allocator, input: []const u8, block_size: usize) !InputBlocks {
-    var input_blocks = try InputBlocks.init(allocator, input.len, block_size);
+const KeyCandidateHistogram = struct {
+    const Self = @This();
+    allocator: Allocator,
+    keys2scores: std.AutoHashMap(u8, std.ArrayList(f32)),
 
-    // for (0..input_blocks.num_blocks) |block_index| {
-    //     const block_range = input_blocks.getBlockStartEnd(block_index);
-    //     const input_block = input[block_range.start..block_range.end];
-    //     for (input_block, 0..input_block.len) |byte, byte_index| {
-    //         input_blocks.setByteAtBlock(, byte_index, byte);
-    //     }
-    // }
+    fn init(allocator: Allocator) Self {
+        const keys2scores = std.AutoHashMap(u8, std.ArrayList(f32)).init(Allocator);
+        return Self{ .allocator = allocator, .keys2scores = keys2scores };
+    }
 
-    return input_blocks;
+    fn deinit(self: *Self) void {
+        while (self.keys2scores.valueIterator().next()) |scores| {
+            defer scores.deinit();
+        }
+
+        defer self.keys2scores.deinit();
+    }
+
+    fn add_key_score(self: *Self, key: u8, score: f32) !void {
+        const result = try self.keys2scores.getOrPut(key);
+        if (!result.found_existing) {
+            result.value_ptr.init(self.allocator);
+        }
+        result.value_ptr.append(score);
+    }
+
+    fn computeMeanKeyScores(self: Self) !std.AutoHashMap(u8, f32) {
+        var mean_scores = std.AutoHashMap(u8, f32).init(self.allocator);
+        while (self.keys2scores.iterator().next()) |entry| {
+            var mean_score_key: f32 = 0.0;
+            const key_scores = entry.value_ptr.*;
+            for (key_scores.items) |score| {
+                mean_score_key += score;
+            }
+            mean_score_key /= key_scores.items.len;
+            try mean_scores.put(entry.key_ptr.*, mean_score_key);
+        }
+        return mean_scores;
+    }
+};
+
+fn findRepeatingKeyXorBlocks(allocator: Allocator, input: []const u8, key_len: usize, char_frequencies: string_utils.char_frequency_map) ![]u8 {
+    var input_blocks = try InputBlocks.initWithData(allocator, input, key_len);
+    defer input_blocks.deinit();
+
+    var transposed_blocks = try input_blocks.transpose();
+    defer transposed_blocks.deinit();
+
+    var key_candidates = try std.ArrayList(u8).initCapacity(allocator, transposed_blocks.num_blocks);
+    defer key_candidates.deinit();
+
+    // Solve each block as if it was single-character XOR
+    while (transposed_blocks.iter().next()) |block| {
+        const decrypted = try decryptXordBytes(allocator, block, char_frequencies);
+        defer allocator.free(decrypted.output);
+        key_candidates.append(decrypted.key);
+    }
+
+    var key_bytes = std.ArrayList(u8).init(allocator);
+    var total_key_score: f32 = 0.0;
+
+    // Now get the histograms for every key for every block
+    // The best scoring keys are likely to be the key for that block
+    while (transposed_blocks.iter().next()) |block| {
+        var best_key: ?u8 = null;
+        var best_score: f32 = 0.0;
+        for (key_candidates.items) |key| {
+            const decrypted = try decryptXordSingleByteKey(allocator, block, key);
+            defer allocator.free(decrypted);
+
+            const score = string_utils.scoreString(decrypted, char_frequencies);
+            if (score > best_score) {
+                best_score = score;
+                best_key = key;
+            }
+        }
+        key_bytes.append(best_key.?);
+        total_key_score += best_score;
+    }
 }
 
-pub fn breakRepeatingKeyXor(allocator: Allocator, input: []const u8, min_key_len: usize, max_key_len: usize) ![]u8 {
+pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_len: usize, max_key_len: usize) ![]u8 {
     const out = try allocator.alloc(u8, input.len);
 
     var queue = std.PriorityDequeue(KeySize, void, KeySize.getSmallerDistance).init(allocator, {});
@@ -226,7 +390,8 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: []const u8, min_key_len
         // We know the array is large enough and the queue has enough elements
         smallest_distance_keys.append(queue.removeMin()) catch unreachable;
     }
-    std.debug.print("{any}\n", .{smallest_distance_keys});
+
+    for (smallest_distance_keys.slice()) |key_size| {}
 
     return out;
 }
@@ -317,6 +482,28 @@ test "fast get normalized edit distance for chunks" {
     try testing.expectApproxEqAbs(2.0, normalized_distance2, 1e-5);
 }
 
+test "fast make and transpose blocks" {
+    const allocator = testing.allocator;
+
+    const test_input = "AAAABBBBCCCCDDDD";
+    const block_size: usize = 3;
+
+    var blocks = try InputBlocks.initWithData(allocator, test_input, block_size);
+    defer blocks.deinit();
+    var transposed_blocks = try blocks.transpose();
+    defer transposed_blocks.deinit();
+
+    var block_iterator = transposed_blocks.iter();
+
+    const expected_blocks: [3]*const [6]u8 = .{ "AABCDD", "ABBCD\x00", "ABCCD\x00" };
+
+    var block_index: usize = 0;
+    while (block_iterator.next()) |block| {
+        try testing.expectStringStartsWith(block, expected_blocks[block_index][0..block.len]);
+        block_index += 1;
+    }
+}
+
 test "fast break repeating-key XOR" {
     const allocator = testing.allocator;
     const test_filename = "data/pride_prejudice_jane.txt";
@@ -327,19 +514,4 @@ test "fast break repeating-key XOR" {
 
     const decrypted = try breakRepeatingKeyXor(allocator, input, 2, 10);
     defer allocator.free(decrypted);
-}
-
-test "fast make and transpose blocks" {
-    const allocator = testing.allocator;
-    const test_input = "aaaabbbbccccdddd";
-
-    const block_size: usize = 4;
-    var transposed_blocks = try makeAndTransposeBlocks(allocator, test_input, block_size);
-    defer transposed_blocks.deinit();
-    var block_iterator = transposed_blocks.iter();
-
-    const expected_block = "abcd";
-    while (block_iterator.next()) |block| {
-        try testing.expectEqualStrings(expected_block, block);
-    }
 }
