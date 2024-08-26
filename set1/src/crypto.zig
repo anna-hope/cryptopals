@@ -11,8 +11,9 @@ const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 
-const HexString = string_utils.HexString;
 const Base64String = string_utils.Base64String;
+const HexString = string_utils.HexString;
+const char_frequency_map = string_utils.char_frequency_map;
 
 pub const CryptoError = error{
     UnequalLengthBuffers,
@@ -128,10 +129,10 @@ fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
 }
 
 const KeySize = struct {
-    len: usize,
+    size: usize,
     distance: f32,
 
-    fn getSmallerDistance(_: void, a: KeySize, b: KeySize) math.Order {
+    fn compareDistance(_: void, a: KeySize, b: KeySize) math.Order {
         return math.order(a.distance, b.distance);
     }
 };
@@ -231,6 +232,12 @@ const InputBlocks = struct {
         self.data[block_start + byte_index] = byte;
     }
 
+    fn setBlock(self: *Self, block_index: usize, data: []const u8) void {
+        const block_range = self.getBlockStartEnd(block_index);
+        std.debug.assert(data.len == block_range.end - block_range.start);
+        std.mem.copyBackwards(u8, self.data[block_range.start..block_range.end], data);
+    }
+
     fn transpose(self: Self) !Self {
         var new_special_block_place: ?SpecialBlockPlace = null;
         var new_block_size = self.num_blocks;
@@ -283,48 +290,24 @@ const BlockIterator = struct {
     }
 };
 
-const KeyCandidateHistogram = struct {
+pub const DecryptedRepeatingKeyOutput = struct {
     const Self = @This();
-    allocator: Allocator,
-    keys2scores: std.AutoHashMap(u8, std.ArrayList(f32)),
+    output: []u8,
+    key: []u8,
+    total_score: f32,
 
-    fn init(allocator: Allocator) Self {
-        const keys2scores = std.AutoHashMap(u8, std.ArrayList(f32)).init(Allocator);
-        return Self{ .allocator = allocator, .keys2scores = keys2scores };
+    pub fn getKeyMeanScore(self: Self) f32 {
+        return self.total_score / @as(f32, @floatFromInt(self.key.len));
     }
 
-    fn deinit(self: *Self) void {
-        while (self.keys2scores.valueIterator().next()) |scores| {
-            defer scores.deinit();
-        }
-
-        defer self.keys2scores.deinit();
-    }
-
-    fn add_key_score(self: *Self, key: u8, score: f32) !void {
-        const result = try self.keys2scores.getOrPut(key);
-        if (!result.found_existing) {
-            result.value_ptr.init(self.allocator);
-        }
-        result.value_ptr.append(score);
-    }
-
-    fn computeMeanKeyScores(self: Self) !std.AutoHashMap(u8, f32) {
-        var mean_scores = std.AutoHashMap(u8, f32).init(self.allocator);
-        while (self.keys2scores.iterator().next()) |entry| {
-            var mean_score_key: f32 = 0.0;
-            const key_scores = entry.value_ptr.*;
-            for (key_scores.items) |score| {
-                mean_score_key += score;
-            }
-            mean_score_key /= key_scores.items.len;
-            try mean_scores.put(entry.key_ptr.*, mean_score_key);
-        }
-        return mean_scores;
+    pub fn compareMeanScore(_: void, self: Self, other: Self) math.Order {
+        const this_mean_score = self.getKeyMeanScore();
+        const other_mean_score = other.getKeyMeanScore();
+        return math.order(this_mean_score, other_mean_score);
     }
 };
 
-fn findRepeatingKeyXorBlocks(allocator: Allocator, input: []const u8, key_len: usize, char_frequencies: string_utils.char_frequency_map) ![]u8 {
+fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: usize, char_frequencies: char_frequency_map) !DecryptedRepeatingKeyOutput {
     var input_blocks = try InputBlocks.initWithData(allocator, input, key_len);
     defer input_blocks.deinit();
 
@@ -334,11 +317,13 @@ fn findRepeatingKeyXorBlocks(allocator: Allocator, input: []const u8, key_len: u
     var key_candidates = try std.ArrayList(u8).initCapacity(allocator, transposed_blocks.num_blocks);
     defer key_candidates.deinit();
 
+    var transposed_blocks_iter = transposed_blocks.iter();
+
     // Solve each block as if it was single-character XOR
-    while (transposed_blocks.iter().next()) |block| {
+    while (transposed_blocks_iter.next()) |block| {
         const decrypted = try decryptXordBytes(allocator, block, char_frequencies);
         defer allocator.free(decrypted.output);
-        key_candidates.append(decrypted.key);
+        try key_candidates.append(decrypted.key);
     }
 
     var key_bytes = std.ArrayList(u8).init(allocator);
@@ -346,9 +331,15 @@ fn findRepeatingKeyXorBlocks(allocator: Allocator, input: []const u8, key_len: u
 
     // Now get the histograms for every key for every block
     // The best scoring keys are likely to be the key for that block
-    while (transposed_blocks.iter().next()) |block| {
+    var block_index: usize = 0;
+    var transposed_blocks_iter2 = transposed_blocks.iter();
+    while (transposed_blocks_iter2.next()) |block| {
         var best_key: ?u8 = null;
         var best_score: f32 = 0.0;
+
+        const best_decryption_block = try allocator.alloc(u8, block.len);
+        defer allocator.free(best_decryption_block);
+
         for (key_candidates.items) |key| {
             const decrypted = try decryptXordSingleByteKey(allocator, block, key);
             defer allocator.free(decrypted);
@@ -357,22 +348,32 @@ fn findRepeatingKeyXorBlocks(allocator: Allocator, input: []const u8, key_len: u
             if (score > best_score) {
                 best_score = score;
                 best_key = key;
+                mem.copyBackwards(u8, best_decryption_block, decrypted);
             }
         }
-        key_bytes.append(best_key.?);
+
+        try key_bytes.append(best_key.?);
         total_key_score += best_score;
+        transposed_blocks.setBlock(block_index, best_decryption_block);
+        block_index += 1;
     }
+
+    // Now that each transposed block is set to its decrypted value, we can get back the original input
+    const original_blocks_decrypted = try transposed_blocks.transpose();
+    const key = try key_bytes.toOwnedSlice();
+    return DecryptedRepeatingKeyOutput{ .output = original_blocks_decrypted.data, .key = key, .total_score = total_key_score };
 }
 
-pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_len: usize, max_key_len: usize) ![]u8 {
-    const out = try allocator.alloc(u8, input.len);
-
-    var queue = std.PriorityDequeue(KeySize, void, KeySize.getSmallerDistance).init(allocator, {});
+pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_len: usize, max_key_len: usize, vocab: [][]u8) !DecryptedRepeatingKeyOutput {
+    var queue = std.PriorityDequeue(KeySize, void, KeySize.compareDistance).init(allocator, {});
     defer queue.deinit();
 
+    const input_raw = try input.decode(allocator);
+    defer allocator.free(input_raw);
+
     for (min_key_len..max_key_len + 1) |key_size| {
-        const distance = try getNormalizedChunkEditDistance(input, key_size);
-        try queue.add(KeySize{ .distance = distance, .len = key_size });
+        const distance = try getNormalizedChunkEditDistance(input_raw, key_size);
+        try queue.add(KeySize{ .distance = distance, .size = key_size });
     }
 
     const max_num_key_sizes = 3;
@@ -383,9 +384,19 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
         smallest_distance_keys.append(queue.removeMin()) catch unreachable;
     }
 
-    // for (smallest_distance_keys.slice()) |key_size| {}
+    var char_frequencies = try string_utils.getCharFrequencies(allocator, vocab);
+    defer char_frequencies.deinit();
 
-    return out;
+    var decrypted_candidates = std.PriorityQueue(DecryptedRepeatingKeyOutput, void, DecryptedRepeatingKeyOutput.compareMeanScore).init(allocator, {});
+    defer decrypted_candidates.deinit();
+
+    for (smallest_distance_keys.slice()) |key_size| {
+        const decrypted = try breakRepeatingKeyFixedLen(allocator, input_raw, key_size.size, char_frequencies);
+        try decrypted_candidates.add(decrypted);
+    }
+
+    // Find the best decrypted candidate based on mean key score
+    return decrypted_candidates.remove();
 }
 
 test "fast fixed xor" {
@@ -431,10 +442,12 @@ test "fast repeating-key XOR" {
     const expected = "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f";
 
     const key = "ICE";
-    var output = try xorWithRepeatingKey(allocator, input, key);
-    defer output.deinit();
+    const output = try xorWithRepeatingKey(allocator, input, key);
+    defer allocator.free(output);
+    var hex_output = try HexString.init(allocator, output);
+    defer hex_output.deinit();
 
-    try testing.expectEqualStrings(expected, output.buf);
+    try testing.expectEqualStrings(expected, hex_output.buf);
 }
 
 test "fast get character frequencies" {
@@ -503,7 +516,18 @@ test "fast break repeating-key XOR" {
     const cwd = fs.cwd();
     const input = try cwd.readFileAlloc(allocator, test_filename, 1024 * 10);
     defer allocator.free(input);
+    var b64input = try Base64String.init(allocator, input);
+    defer b64input.deinit();
 
-    const decrypted = try breakRepeatingKeyXor(allocator, input, 2, 10);
-    defer allocator.free(decrypted);
+    const root_dir = try fs.openDirAbsolute("/", .{});
+    const dict_path = "/usr/share/dict/words";
+    const helpers = @import("helpers.zig");
+    const words = try helpers.readLines(allocator, root_dir, dict_path);
+
+    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 10, words);
+    defer allocator.free(decrypted.output);
+    defer allocator.free(decrypted.key);
+
+    try testing.expectEqualStrings("jane", decrypted.key);
+    try testing.expectEqualStrings(input, decrypted.output);
 }
