@@ -104,24 +104,16 @@ pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: 
     return decryptXordBytes(allocator, input_bytes, char_frequencies);
 }
 
-pub fn encryptRepeatingKeyXor(allocator: Allocator, input: []const u8, key: []const u8) !HexString {
+pub fn xorWithRepeatingKey(allocator: Allocator, input: []const u8, key: []const u8) ![]u8 {
     const raw_output = try allocator.alloc(u8, input.len);
-    defer allocator.free(raw_output);
 
     for (input, 0..input.len) |input_byte, index| {
         const key_byte = key[index % key.len];
-        const encrypted_input_byte = try fixedXorBytes(allocator, &[_]u8{input_byte}, &[_]u8{key_byte});
-        defer allocator.free(encrypted_input_byte);
-
-        // Copy the byte so we can free the encrypted_input_byte array
-        mem.copyForwards(
-            u8,
-            raw_output[index .. index + 1],
-            encrypted_input_byte,
-        );
+        const encrypted_byte = input_byte ^ key_byte;
+        raw_output[index] = encrypted_byte;
     }
 
-    return try HexString.init(allocator, raw_output);
+    return raw_output;
 }
 
 fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
@@ -391,7 +383,7 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
         smallest_distance_keys.append(queue.removeMin()) catch unreachable;
     }
 
-    for (smallest_distance_keys.slice()) |key_size| {}
+    // for (smallest_distance_keys.slice()) |key_size| {}
 
     return out;
 }
@@ -439,7 +431,7 @@ test "fast repeating-key XOR" {
     const expected = "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f";
 
     const key = "ICE";
-    var output = try encryptRepeatingKeyXor(allocator, input, key);
+    var output = try xorWithRepeatingKey(allocator, input, key);
     defer output.deinit();
 
     try testing.expectEqualStrings(expected, output.buf);
