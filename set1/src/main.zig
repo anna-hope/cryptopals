@@ -4,6 +4,7 @@ const process = std.process;
 
 const crypto = @import("crypto.zig");
 const helpers = @import("helpers.zig");
+const string_utils = @import("string_utils.zig");
 
 const ProgramError = error{
     NotEnoughArguments,
@@ -50,9 +51,9 @@ pub fn main() !void {
     // Limit to 10 megabytes
     const input = try cwd.readFileAlloc(allocator, input_path, 1024 * 1024 * 10);
 
-    const encrypted = try crypto.encryptRepeatingKeyXor(allocator, input, key);
-
-    try stdout.print("{s}\n", .{encrypted.buf});
+    const encrypted = try crypto.xorWithRepeatingKey(allocator, input, key);
+    const encoded = try string_utils.Base64String.init(allocator, encrypted);
+    try stdout.print("{s}\n", .{encoded.buf});
 
     try bw.flush();
 }
