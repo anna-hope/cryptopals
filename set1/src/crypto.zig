@@ -525,15 +525,14 @@ test "fast make and transpose blocks" {
     }
 }
 
-test "fast break repeating-key XOR" {
+test "break repeating-key XOR" {
     const allocator = testing.allocator;
-    const test_filename = "data/pride_prejudice_jane.txt";
+    const test_filename = "data/pride_prejudice_encrypted_jane.txt";
 
     const cwd = fs.cwd();
     const input = try cwd.readFileAlloc(allocator, test_filename, 1024 * 10);
     defer allocator.free(input);
-    var b64input = try Base64String.init(allocator, input);
-    defer b64input.deinit();
+    const b64input = Base64String.initFromBase64(input);
 
     const root_dir = try fs.openDirAbsolute("/", .{});
     const dict_path = "/usr/share/dict/words";
