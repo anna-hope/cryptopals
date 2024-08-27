@@ -169,8 +169,8 @@ const InputBlocks = struct {
             }
         }
 
-        const blocks = try allocator.alloc(u8, input_len);
-        return Self{ .allocator = allocator, .num_blocks = num_blocks, .block_size = block_size, .special_block_size = special_block_size, .data = blocks };
+        const data = try allocator.alloc(u8, input_len);
+        return Self{ .allocator = allocator, .num_blocks = num_blocks, .block_size = block_size, .special_block_size = special_block_size, .data = data };
     }
 
     fn initWithData(allocator: Allocator, input: []const u8, block_size: usize) !Self {
@@ -292,9 +292,19 @@ const BlockIterator = struct {
 
 pub const DecryptedRepeatingKeyOutput = struct {
     const Self = @This();
-    output: []u8,
-    key: []u8,
+    allocator: Allocator,
+    key: []const u8,
+    output: []const u8,
     total_score: f32,
+
+    pub fn init(allocator: Allocator, key: []const u8, output: []const u8, total_score: f32) Self {
+        return Self{ .allocator = allocator, .key = key, .output = output, .total_score = total_score };
+    }
+
+    pub fn deinit(self: *Self) void {
+        defer self.allocator.free(self.key);
+        defer self.allocator.free(self.output);
+    }
 
     pub fn getKeyMeanScore(self: Self) f32 {
         return self.total_score / @as(f32, @floatFromInt(self.key.len));
@@ -361,7 +371,7 @@ fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: u
     // Now that each transposed block is set to its decrypted value, we can get back the original input
     const original_blocks_decrypted = try transposed_blocks.transpose();
     const key = try key_bytes.toOwnedSlice();
-    return DecryptedRepeatingKeyOutput{ .output = original_blocks_decrypted.data, .key = key, .total_score = total_key_score };
+    return DecryptedRepeatingKeyOutput.init(allocator, key, original_blocks_decrypted.data, total_key_score);
 }
 
 pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_len: usize, max_key_len: usize, vocab: [][]u8) !DecryptedRepeatingKeyOutput {
@@ -396,7 +406,13 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
     }
 
     // Find the best decrypted candidate based on mean key score
-    return decrypted_candidates.remove();
+    const best_candidate = decrypted_candidates.remove();
+
+    while (decrypted_candidates.count() > 0) {
+        var candidate = decrypted_candidates.removeIndex(0);
+        defer candidate.deinit();
+    }
+    return best_candidate;
 }
 
 test "fast fixed xor" {
@@ -522,9 +538,10 @@ test "fast break repeating-key XOR" {
     const root_dir = try fs.openDirAbsolute("/", .{});
     const dict_path = "/usr/share/dict/words";
     const helpers = @import("helpers.zig");
-    const words = try helpers.readLines(allocator, root_dir, dict_path);
+    var words = try helpers.readLines(allocator, root_dir, dict_path);
+    defer words.deinit();
 
-    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 10, words);
+    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 10, words.data);
     defer allocator.free(decrypted.output);
     defer allocator.free(decrypted.key);
 
