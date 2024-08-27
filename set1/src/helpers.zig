@@ -7,20 +7,40 @@ const Allocator = std.mem.Allocator;
 pub const Lines = struct {
     const Self = @This();
     allocator: Allocator,
-    lines: [][]u8,
+    data: [][]u8,
     len: usize,
 
     /// Lines will own the passed data.
-    pub fn init(allocator: Allocator, lines: [][]u8) Self {
-        return Self{ .allocator = allocator, .lines = lines, .len = lines.len };
+    pub fn init(allocator: Allocator, data: [][]u8) Self {
+        return Self{ .allocator = allocator, .data = data, .len = data.len };
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.lines) |line| {
+        for (self.data) |line| {
             defer self.allocator.free(line);
         }
 
-        self.allocator.free(self.lines);
+        self.allocator.free(self.data);
+    }
+
+    pub fn iter(self: Self) LinesIterator {
+        return LinesIterator{ .lines = self };
+    }
+};
+
+pub const LinesIterator = struct {
+    const Self = @This();
+    index: usize = 0,
+    lines: Lines,
+
+    pub fn next(self: *Self) ?[]u8 {
+        if (self.index >= self.lines.len) {
+            return null;
+        }
+
+        const current_line = self.lines.data[self.index];
+        self.index += 1;
+        return current_line;
     }
 };
 
