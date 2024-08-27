@@ -4,6 +4,8 @@ const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 
+const default_max_line_len: usize = 1024;
+
 pub const Lines = struct {
     const Self = @This();
     allocator: Allocator,
@@ -44,13 +46,19 @@ pub const LinesIterator = struct {
     }
 };
 
-pub fn readLines(allocator: Allocator, dir: fs.Dir, relative_path: []const u8) !Lines {
+pub fn readLines(allocator: Allocator, dir: fs.Dir, relative_path: []const u8, max_line_len: ?usize) !Lines {
     const file = try dir.openFile(relative_path, .{});
     defer file.close();
 
+    const max_size = if (max_line_len) |given_line_len| blk: {
+        break :blk given_line_len;
+    } else blk: {
+        break :blk default_max_line_len;
+    };
+
     const file_reader = file.reader();
     var words = std.ArrayList([]u8).init(allocator);
-    while (try file_reader.readUntilDelimiterOrEofAlloc(allocator, '\n', 1024)) |word| {
+    while (try file_reader.readUntilDelimiterOrEofAlloc(allocator, '\n', max_size)) |word| {
         try words.append(word[0..word.len]);
     }
 
@@ -61,7 +69,7 @@ test "fast read file lines" {
     const path = "data/4.txt";
     const allocator = testing.allocator;
 
-    var lines = try readLines(allocator, fs.cwd(), path);
+    var lines = try readLines(allocator, fs.cwd(), path, null);
     defer lines.deinit();
 
     try testing.expect(lines.len > 0);

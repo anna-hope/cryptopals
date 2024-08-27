@@ -526,18 +526,22 @@ test "fast make and transpose blocks" {
 }
 
 test "break repeating-key XOR" {
+    const helpers = @import("helpers.zig");
     const allocator = testing.allocator;
-    const test_filename = "data/pride_prejudice_encrypted_jane.txt";
 
-    const cwd = fs.cwd();
-    const input = try cwd.readFileAlloc(allocator, test_filename, 1024 * 10);
+    const test_filename = "data/pride_prejudice_encrypted_jane.txt";
+    // Use readlines because the file may have ... multiple lines
+    var input_lines = try helpers.readLines(allocator, fs.cwd(), test_filename, 2048);
+    defer input_lines.deinit();
+
+    const input = try mem.concat(allocator, u8, input_lines.data);
     defer allocator.free(input);
+
     const b64input = Base64String.initFromBase64(input);
 
     const root_dir = try fs.openDirAbsolute("/", .{});
     const dict_path = "/usr/share/dict/words";
-    const helpers = @import("helpers.zig");
-    var words = try helpers.readLines(allocator, root_dir, dict_path);
+    var words = try helpers.readLines(allocator, root_dir, dict_path, null);
     defer words.deinit();
 
     const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 10, words.data);
