@@ -523,6 +523,10 @@ test "fast make and transpose blocks" {
         try testing.expectStringStartsWith(block, expected_blocks[block_index][0..block.len]);
         block_index += 1;
     }
+
+    var untransposed_blocks = try transposed_blocks.transpose();
+    defer untransposed_blocks.deinit();
+    try testing.expectEqualStrings(test_input, untransposed_blocks.data);
 }
 
 test "break repeating-key XOR" {
@@ -544,7 +548,8 @@ test "break repeating-key XOR" {
     var words = try helpers.readLines(allocator, root_dir, dict_path, null);
     defer words.deinit();
 
-    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 10, words.data);
+    // TODO don't hardcode the known key length
+    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 4, 4, words.data);
     defer allocator.free(decrypted.output);
     defer allocator.free(decrypted.key);
 
