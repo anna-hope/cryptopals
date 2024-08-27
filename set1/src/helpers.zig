@@ -4,7 +4,27 @@ const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 
-pub fn readLines(allocator: Allocator, dir: fs.Dir, relative_path: []const u8) ![][]u8 {
+pub const Lines = struct {
+    const Self = @This();
+    allocator: Allocator,
+    lines: [][]u8,
+    len: usize,
+
+    /// Lines will own the passed data.
+    pub fn init(allocator: Allocator, lines: [][]u8) Self {
+        return Self{ .allocator = allocator, .lines = lines, .len = lines.len };
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.lines) |line| {
+            defer self.allocator.free(line);
+        }
+
+        self.allocator.free(self.lines);
+    }
+};
+
+pub fn readLines(allocator: Allocator, dir: fs.Dir, relative_path: []const u8) !Lines {
     const file = try dir.openFile(relative_path, .{});
     defer file.close();
 
@@ -14,7 +34,7 @@ pub fn readLines(allocator: Allocator, dir: fs.Dir, relative_path: []const u8) !
         try words.append(word[0..word.len]);
     }
 
-    return try words.toOwnedSlice();
+    return Lines.init(allocator, try words.toOwnedSlice());
 }
 
 test "fast read file lines" {
