@@ -61,12 +61,8 @@ test "fast read file lines" {
     const path = "data/4.txt";
     const allocator = testing.allocator;
 
-    const lines = try readLines(allocator, fs.cwd(), path);
-    defer allocator.free(lines);
+    var lines = try readLines(allocator, fs.cwd(), path);
+    defer lines.deinit();
 
     try testing.expect(lines.len > 0);
-
-    for (lines) |line| {
-        defer allocator.free(line);
-    }
 }
