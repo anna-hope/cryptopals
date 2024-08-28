@@ -137,7 +137,7 @@ const KeySize = struct {
     }
 };
 
-const SpecialBlockPlace = enum {
+const SpecialBlockLocation = enum {
     Start,
     End,
 };
@@ -147,34 +147,43 @@ const InputBlocks = struct {
     allocator: Allocator,
     num_blocks: usize,
     block_size: usize,
-    special_block_size: usize,
     data: []u8,
 
-    fn init(allocator: Allocator, input_len: usize, block_size: usize, special_block_place: ?SpecialBlockPlace) !Self {
+    fn init(allocator: Allocator, input_len: usize, block_size: usize) !Self {
         var num_blocks = input_len / block_size;
 
         // In case we can't cleanly divide input_size by block_size,
-        // and need a "special" differently-sized block at start or end
+        // we'll need to pad the data with nulls
         const leftover_bytes: usize = input_len - num_blocks * block_size;
-        var special_block_size: usize = 0;
-        if (leftover_bytes > 0) {
-            switch (special_block_place.?) {
-                SpecialBlockPlace.Start => {
-                    special_block_size = block_size + leftover_bytes;
-                },
-                SpecialBlockPlace.End => {
-                    special_block_size = leftover_bytes;
-                    num_blocks += 1;
-                },
-            }
-        }
+        var buf_len = input_len;
 
-        const data = try allocator.alloc(u8, input_len);
-        return Self{ .allocator = allocator, .num_blocks = num_blocks, .block_size = block_size, .special_block_size = special_block_size, .data = data };
+        const data = if (leftover_bytes > 0) blk: {
+            // We'll have an extra padded block at the end
+            num_blocks += 1;
+
+            // Pad the end of the internal buffer to keep all blocks the same size
+            buf_len += block_size - leftover_bytes;
+            const data = try allocator.alloc(u8, buf_len);
+
+            // Set all the "extra" bytes at the end to unicode PAD (128 or 0x80)
+            for (input_len..data.len) |pad_index| {
+                data[pad_index] = 0x80;
+            }
+
+            break :blk data;
+        } else blk: {
+            break :blk try allocator.alloc(u8, buf_len);
+        };
+
+        return Self{ .allocator = allocator, .num_blocks = num_blocks, .block_size = block_size, .data = data };
+    }
+
+    fn deinit(self: *Self) void {
+        self.allocator.free(self.data);
     }
 
     fn initWithData(allocator: Allocator, input: []const u8, block_size: usize) !Self {
-        var self = try Self.init(allocator, input.len, block_size, SpecialBlockPlace.End);
+        var self = try Self.init(allocator, input.len, block_size);
         self.makeBlocks(input);
         return self;
     }
@@ -182,43 +191,21 @@ const InputBlocks = struct {
     fn makeBlocks(self: *Self, input: []const u8) void {
         for (0..self.num_blocks) |block_index| {
             const block_range = self.getBlockStartEnd(block_index);
-            mem.copyBackwards(u8, self.data[block_range.start..block_range.end], input[block_range.start..block_range.end]);
+
+            const input_block = if (block_range.end >= input.len) blk: {
+                // If we're at the last block, then our input block will be shorter than block_size
+                break :blk input[block_range.start..input.len];
+            } else blk: {
+                break :blk input[block_range.start..block_range.end];
+            };
+
+            mem.copyBackwards(u8, self.data[block_range.start..block_range.end], input_block);
         }
-    }
-
-    fn deinit(self: *Self) void {
-        self.allocator.free(self.data);
-    }
-
-    fn getSpecialBlockIndex(self: Self) ?usize {
-        if (self.special_block_size > self.block_size) {
-            // If the special block is larger than regular ones, it's at the beginning.
-            return 0;
-        } else if (self.special_block_size > 0 and self.special_block_size < self.block_size) {
-            // Otherwise, it's at the end (because it's shorter than regular blocks)
-            return self.num_blocks - 1;
-        }
-
-        // Or we don't have a special block at all
-        return null;
     }
 
     fn getBlockStartEnd(self: Self, block_index: usize) struct { start: usize, end: usize } {
-        const block_size = if (self.special_block_size > 0 and block_index == self.getSpecialBlockIndex().?) blk: {
-            break :blk self.special_block_size;
-        } else blk: {
-            break :blk self.block_size;
-        };
-
-        var block_start = block_index * self.block_size;
-        if (block_size < self.special_block_size) {
-            // We have a special block at the beginning (and we are not inside it),
-            // (because the size of the current block is shorter than the size of the special block)
-            // so we need to offset the current block_start by the size of the special block.
-            block_start += self.special_block_size - block_size;
-        }
-
-        const block_end = block_start + block_size;
+        const block_start = block_index * self.block_size;
+        const block_end = block_start + self.block_size;
         return .{ .start = block_start, .end = block_end };
     }
 
@@ -229,7 +216,9 @@ const InputBlocks = struct {
 
     fn setByteAtIndex(self: *Self, block_index: usize, byte_index: usize, byte: u8) void {
         const block_start = self.getBlockStartEnd(block_index).start;
-        self.data[block_start + byte_index] = byte;
+        const raw_index = block_start + byte_index;
+        std.debug.assert(self.data[raw_index] == 0xaa);
+        self.data[raw_index] = byte;
     }
 
     fn setBlock(self: *Self, block_index: usize, data: []const u8) void {
@@ -239,21 +228,9 @@ const InputBlocks = struct {
     }
 
     fn transpose(self: Self) !Self {
-        var new_special_block_place: ?SpecialBlockPlace = null;
-        var new_block_size = self.num_blocks;
-        if (self.getSpecialBlockIndex()) |special_block_index| {
-            if (special_block_index + 1 == self.num_blocks) {
-                // If it's currently at the end, the transposed blocks should have it at the start.
-                new_special_block_place = SpecialBlockPlace.Start;
-            } else {
-                // ... and vice versa
-                new_special_block_place = SpecialBlockPlace.End;
-            }
-            // Don't count the special block for new block size
-            new_block_size -= 1;
-        }
+        const new_block_size = self.num_blocks;
 
-        var transposed = try Self.init(self.allocator, self.data.len, new_block_size, new_special_block_place);
+        var transposed = try Self.init(self.allocator, self.data.len, new_block_size);
 
         for (0..self.num_blocks) |block_index| {
             const block = self.getBlock(block_index);
@@ -267,6 +244,11 @@ const InputBlocks = struct {
 
     fn iter(self: Self) BlockIterator {
         return BlockIterator.init(self);
+    }
+
+    /// Returns the underlying buffer without padding at the end (if any)
+    fn trimmedData(self: Self) []const u8 {
+        return mem.trimRight(u8, self.data, "\x80\x00");
     }
 };
 
@@ -516,7 +498,7 @@ test "fast make and transpose blocks" {
 
     var block_iterator = transposed_blocks.iter();
 
-    const expected_blocks: [3]*const [6]u8 = .{ "AABCDD", "ABBCD\x00", "ABCCD\x00" };
+    const expected_blocks: [3]*const [6]u8 = .{ "AABCDD", "ABBCD\x80", "ABCCD\x80" };
 
     var block_index: usize = 0;
     while (block_iterator.next()) |block| {
@@ -526,7 +508,7 @@ test "fast make and transpose blocks" {
 
     var untransposed_blocks = try transposed_blocks.transpose();
     defer untransposed_blocks.deinit();
-    try testing.expectEqualStrings(test_input, untransposed_blocks.data);
+    try testing.expectEqualStrings(test_input, untransposed_blocks.trimmedData());
 }
 
 test "break repeating-key XOR" {
