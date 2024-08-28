@@ -515,9 +515,12 @@ test "break repeating-key XOR" {
     const helpers = @import("helpers.zig");
     const allocator = testing.allocator;
 
-    const test_filename = "data/pride_prejudice_encrypted_jane.txt";
+    const encrypted_filename = "data/pride_prejudice_encrypted_jane.txt";
+    const dir = fs.cwd();
+
     // Use readlines because the file may have ... multiple lines
-    var input_lines = try helpers.readLines(allocator, fs.cwd(), test_filename, 2048);
+    const max_line_len: usize = 2048;
+    var input_lines = try helpers.readLines(allocator, dir, encrypted_filename, max_line_len);
     defer input_lines.deinit();
 
     const input = try mem.concat(allocator, u8, input_lines.data);
@@ -536,5 +539,10 @@ test "break repeating-key XOR" {
     defer allocator.free(decrypted.key);
 
     try testing.expectEqualStrings("jane", decrypted.key);
-    try testing.expectEqualStrings(input, decrypted.output);
+
+    const unencrypted_filename = "data/pride_prejudice.txt";
+    const unencrypted_input = try dir.readFileAlloc(allocator, unencrypted_filename, max_line_len);
+    defer allocator.free(unencrypted_input);
+
+    try testing.expectEqualStrings(unencrypted_input, decrypted.output);
 }
