@@ -15,6 +15,8 @@ const Base64String = string_utils.Base64String;
 const HexString = string_utils.HexString;
 const char_frequency_map = string_utils.char_frequency_map;
 
+const default_pad_char: u8 = 0x80;
+
 pub const CryptoError = error{
     UnequalLengthBuffers,
     BufferTooShort,
@@ -167,7 +169,7 @@ const InputBlocks = struct {
 
             // Set all the "extra" bytes at the end to unicode PAD (128 or 0x80)
             for (input_len..data.len) |pad_index| {
-                data[pad_index] = 0x80;
+                data[pad_index] = default_pad_char;
             }
 
             break :blk data;
@@ -248,7 +250,7 @@ const InputBlocks = struct {
 
     /// Returns the underlying buffer without padding at the end (if any)
     fn trimmedData(self: Self) []const u8 {
-        return mem.trimRight(u8, self.data, "\x80\x00");
+        return mem.trimRight(u8, self.data, [_]u8{ default_pad_char, "\x00" });
     }
 };
 
