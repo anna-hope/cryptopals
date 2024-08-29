@@ -22,141 +22,6 @@ pub const CryptoError = error{
     BufferTooShort,
 };
 
-/// XORs bytes. If either of the two bytes is the `default_pad_char`, returns null.
-fn xorBytesExceptPad(a: u8, b: u8) ?u8 {
-    if (a == default_pad_char or b == default_pad_char) {
-        return null;
-    }
-
-    return a ^ b;
-}
-
-/// XORs bytes. If either of the two bytes is `PAD`, the behavior depends on the value of `should_xor_pad_char`.
-///
-/// If either of the characters is `PAD` and `ignore_pad` is `true`, this function XORs them anyway.
-/// If either character is `PAD` and `should_xor_pad_char` is `false`,
-/// returns `a` if `b == PAD` and `b` if `a == PAD`.
-/// Note that this means that if `should_xor_pad_char` is false and both `a` and `b` are `PAD`,
-/// then the output will be `PAD`.
-fn xorBytes(a: u8, b: u8, should_xor_pad_char: bool) u8 {
-    if (xorBytesExceptPad(a, b)) |result| {
-        return result;
-    } else if (should_xor_pad_char) {
-        return a ^ b;
-    } else if (a == default_pad_char) {
-        return b;
-    } else {
-        return a;
-    }
-}
-
-fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8, should_xor_pad_char: bool) ![]u8 {
-    if (buf1.len != buf2.len) {
-        return CryptoError.UnequalLengthBuffers;
-    }
-
-    const out = try allocator.alloc(u8, buf1.len);
-
-    for (0..out.len) |index| {
-        const byte1 = buf1[index];
-        const byte2 = buf2[index];
-        out[index] = xorBytes(byte1, byte2, should_xor_pad_char);
-    }
-
-    return out;
-}
-
-pub fn fixedXorHex(allocator: Allocator, hex1: HexString, hex2: HexString) !HexString {
-    if (hex1.buf.len != hex2.buf.len) {
-        return CryptoError.UnequalLengthBuffers;
-    }
-
-    const buf1 = try hex1.decode(allocator);
-    defer allocator.free(buf1);
-
-    const buf2 = try hex2.decode(allocator);
-    defer allocator.free(buf2);
-
-    const out_bytes = try fixedXorBytes(allocator, buf1, buf2, true);
-    defer allocator.free(out_bytes);
-
-    return try HexString.init(allocator, out_bytes);
-}
-
-fn decryptXordSingleByteKey(allocator: Allocator, input: []const u8, key_byte: u8) ![]u8 {
-    var key_candidate = try std.BoundedArray(u8, 1024).init(0);
-    key_candidate.appendNTimesAssumeCapacity(key_byte, input.len);
-    const key_candidate_slice = key_candidate.slice();
-
-    const decrypted_candidate = try fixedXorBytes(allocator, input, key_candidate_slice);
-    return decrypted_candidate;
-}
-
-pub const DecryptedOutput = struct {
-    output: []u8,
-    key: u8,
-    score: f32,
-};
-
-fn decryptXordBytes(allocator: Allocator, input: []const u8, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
-    // Get the alphabet to have a list of all the possible characters that could act as the key.
-    // (Assuming alphabetic ascii.)
-    var alphabet = std.ArrayList(u8).init(allocator);
-    defer alphabet.deinit();
-
-    for (string_utils.alphabet_chars) |char| {
-        try alphabet.append(char);
-    }
-
-    const best_candidate: []u8 = try allocator.alloc(u8, input.len);
-    var best_score: f32 = 0.0;
-    var key: ?u8 = null;
-
-    for (alphabet.items) |char| {
-        const decrypted_candidate = try decryptXordSingleByteKey(allocator, input, char);
-        defer allocator.free(decrypted_candidate);
-
-        const score = string_utils.scoreString(decrypted_candidate, char_frequencies);
-
-        if (score > best_score) {
-            mem.copyForwards(u8, best_candidate, decrypted_candidate);
-            best_score = score;
-            key = char;
-        }
-    }
-
-    return DecryptedOutput{ .output = best_candidate, .key = key.?, .score = best_score };
-}
-
-pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
-    const input_bytes = try input.decode(allocator);
-    defer allocator.free(input_bytes);
-    return decryptXordBytes(allocator, input_bytes, char_frequencies);
-}
-
-pub fn xorWithRepeatingKey(allocator: Allocator, input: []const u8, key: []const u8) ![]u8 {
-    const raw_output = try allocator.alloc(u8, input.len);
-
-    for (input, 0..input.len) |input_byte, index| {
-        const key_byte = key[index % key.len];
-        const encrypted_byte = xorBytes(input_byte, key_byte, true);
-        raw_output[index] = encrypted_byte;
-    }
-
-    return raw_output;
-}
-
-fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
-    if (chunk_len * 2 > input.len) {
-        return CryptoError.BufferTooShort;
-    }
-
-    const first_chunk = input[0..chunk_len];
-    const second_chunk = input[chunk_len .. chunk_len * 2];
-    const distance = try string_utils.computeHammingDistance(first_chunk, second_chunk);
-    return @as(f32, @floatFromInt(distance)) / @as(f32, @floatFromInt(chunk_len));
-}
-
 const KeySize = struct {
     size: usize,
     distance: f32,
@@ -164,11 +29,6 @@ const KeySize = struct {
     fn compareDistance(_: void, a: KeySize, b: KeySize) math.Order {
         return math.order(a.distance, b.distance);
     }
-};
-
-const SpecialBlockLocation = enum {
-    Start,
-    End,
 };
 
 const InputBlocks = struct {
@@ -328,6 +188,141 @@ pub const DecryptedRepeatingKeyOutput = struct {
         return math.order(this_mean_score, other_mean_score);
     }
 };
+
+/// XORs bytes. If either of the two bytes is the `default_pad_char`, returns null.
+fn xorBytesExceptPad(a: u8, b: u8) ?u8 {
+    if (a == default_pad_char or b == default_pad_char) {
+        return null;
+    }
+
+    return a ^ b;
+}
+
+/// XORs bytes. If either of the two bytes is `PAD`, the behavior depends on the value of `should_xor_pad_char`.
+///
+/// If either of the characters is `PAD` and `ignore_pad` is `true`, this function XORs them anyway.
+/// If either character is `PAD` and `should_xor_pad_char` is `false`,
+/// returns `a` if `b == PAD` and `b` if `a == PAD`.
+/// Note that this means that if `should_xor_pad_char` is false and both `a` and `b` are `PAD`,
+/// then the output will be `PAD`.
+fn xorBytes(a: u8, b: u8, should_xor_pad_char: bool) u8 {
+    if (xorBytesExceptPad(a, b)) |result| {
+        return result;
+    } else if (should_xor_pad_char) {
+        return a ^ b;
+    } else if (a == default_pad_char) {
+        return b;
+    } else {
+        return a;
+    }
+}
+
+fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8, should_xor_pad_char: bool) ![]u8 {
+    if (buf1.len != buf2.len) {
+        return CryptoError.UnequalLengthBuffers;
+    }
+
+    const out = try allocator.alloc(u8, buf1.len);
+
+    for (0..out.len) |index| {
+        const byte1 = buf1[index];
+        const byte2 = buf2[index];
+        out[index] = xorBytes(byte1, byte2, should_xor_pad_char);
+    }
+
+    return out;
+}
+
+pub fn fixedXorHex(allocator: Allocator, hex1: HexString, hex2: HexString) !HexString {
+    if (hex1.buf.len != hex2.buf.len) {
+        return CryptoError.UnequalLengthBuffers;
+    }
+
+    const buf1 = try hex1.decode(allocator);
+    defer allocator.free(buf1);
+
+    const buf2 = try hex2.decode(allocator);
+    defer allocator.free(buf2);
+
+    const out_bytes = try fixedXorBytes(allocator, buf1, buf2, true);
+    defer allocator.free(out_bytes);
+
+    return try HexString.init(allocator, out_bytes);
+}
+
+fn decryptXordSingleByteKey(allocator: Allocator, input: []const u8, key_byte: u8) ![]u8 {
+    var key_candidate = try std.BoundedArray(u8, 1024).init(0);
+    key_candidate.appendNTimesAssumeCapacity(key_byte, input.len);
+    const key_candidate_slice = key_candidate.slice();
+
+    const decrypted_candidate = try fixedXorBytes(allocator, input, key_candidate_slice, false);
+    return decrypted_candidate;
+}
+
+pub const DecryptedOutput = struct {
+    output: []u8,
+    key: u8,
+    score: f32,
+};
+
+fn decryptXordBytes(allocator: Allocator, input: []const u8, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
+    // Get the alphabet to have a list of all the possible characters that could act as the key.
+    // (Assuming alphabetic ascii.)
+    var alphabet = std.ArrayList(u8).init(allocator);
+    defer alphabet.deinit();
+
+    for (string_utils.alphabet_chars) |char| {
+        try alphabet.append(char);
+    }
+
+    const best_candidate: []u8 = try allocator.alloc(u8, input.len);
+    var best_score: f32 = 0.0;
+    var key: ?u8 = null;
+
+    for (alphabet.items) |char| {
+        const decrypted_candidate = try decryptXordSingleByteKey(allocator, input, char);
+        defer allocator.free(decrypted_candidate);
+
+        const score = string_utils.scoreString(decrypted_candidate, char_frequencies);
+
+        if (score > best_score) {
+            mem.copyForwards(u8, best_candidate, decrypted_candidate);
+            best_score = score;
+            key = char;
+        }
+    }
+
+    return DecryptedOutput{ .output = best_candidate, .key = key.?, .score = best_score };
+}
+
+pub fn decryptXordHex(allocator: Allocator, input: HexString, char_frequencies: string_utils.char_frequency_map) !DecryptedOutput {
+    const input_bytes = try input.decode(allocator);
+    defer allocator.free(input_bytes);
+    return decryptXordBytes(allocator, input_bytes, char_frequencies);
+}
+
+pub fn xorWithRepeatingKey(allocator: Allocator, input: []const u8, key: []const u8) ![]u8 {
+    const raw_output = try allocator.alloc(u8, input.len);
+
+    for (input, 0..input.len) |input_byte, index| {
+        const key_byte = key[index % key.len];
+        const encrypted_byte = xorBytes(input_byte, key_byte, true);
+        raw_output[index] = encrypted_byte;
+    }
+
+    return raw_output;
+}
+
+fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
+    if (chunk_len * 2 > input.len) {
+        return CryptoError.BufferTooShort;
+    }
+
+    const first_chunk = input[0..chunk_len];
+    const second_chunk = input[chunk_len .. chunk_len * 2];
+    const distance = try string_utils.computeHammingDistance(first_chunk, second_chunk);
+    return @as(f32, @floatFromInt(distance)) / @as(f32, @floatFromInt(chunk_len));
+}
 
 fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: usize, char_frequencies: char_frequency_map) !DecryptedRepeatingKeyOutput {
     var input_blocks = try InputBlocks.initWithData(allocator, input, key_len);
