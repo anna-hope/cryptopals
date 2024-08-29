@@ -20,6 +20,7 @@ const default_pad_char: u8 = 0x80;
 pub const CryptoError = error{
     UnequalLengthBuffers,
     BufferTooShort,
+    BlockTooShort,
 };
 
 const KeySize = struct {
@@ -31,12 +32,52 @@ const KeySize = struct {
     }
 };
 
+const BlockRange = struct {
+    start: usize,
+    end: usize,
+};
+
+const Block = struct {
+    const Self = @This();
+    data: []const ?u8,
+
+    fn size(self: Self) usize {
+        return self.data.len;
+    }
+
+    /// Length without `null`s at the end  (if any)
+    fn sizeTrimmed(self: Self) usize {
+        var end_index: usize = 0;
+        while (end_index < self.data.len) : (end_index += 1) {
+            if (self.data[end_index] == null) {
+                break;
+            }
+        }
+        return end_index;
+    }
+
+    /// Returns data without the padding `null`s (if any).
+    fn dataTrimmed(self: Self, allocator: Allocator) ![]u8 {
+        var data_trimmed = try std.ArrayList(u8).initCapacity(allocator, self.size());
+        var index: usize = 0;
+
+        while (index < self.size()) : (index += 1) {
+            if (self.data[index]) |byte| {
+                try data_trimmed.append(byte);
+            } else {
+                break;
+            }
+        }
+        return try data_trimmed.toOwnedSlice();
+    }
+};
+
 const InputBlocks = struct {
     const Self = @This();
     allocator: Allocator,
     num_blocks: usize,
     block_size: usize,
-    data: []u8,
+    data: []?u8,
 
     fn init(allocator: Allocator, input_len: usize, block_size: usize) !Self {
         var num_blocks = input_len / block_size;
@@ -52,16 +93,16 @@ const InputBlocks = struct {
 
             // Pad the end of the internal buffer to keep all blocks the same size
             buf_len += block_size - leftover_bytes;
-            const data = try allocator.alloc(u8, buf_len);
+            const data = try allocator.alloc(?u8, buf_len);
 
-            // Set all the "extra" bytes at the end to unicode PAD (128 or 0x80)
+            // Set all the "extra" bytes to null
             for (input_len..data.len) |pad_index| {
-                data[pad_index] = default_pad_char;
+                data[pad_index] = null;
             }
 
             break :blk data;
         } else blk: {
-            break :blk try allocator.alloc(u8, buf_len);
+            break :blk try allocator.alloc(?u8, buf_len);
         };
 
         return Self{ .allocator = allocator, .num_blocks = num_blocks, .block_size = block_size, .data = data };
@@ -73,13 +114,13 @@ const InputBlocks = struct {
 
     fn initWithData(allocator: Allocator, input: []const u8, block_size: usize) !Self {
         var self = try Self.init(allocator, input.len, block_size);
-        self.makeBlocks(input);
+        try self.makeBlocks(input);
         return self;
     }
 
-    fn makeBlocks(self: *Self, input: []const u8) void {
+    fn makeBlocks(self: *Self, input: []const u8) !void {
         for (0..self.num_blocks) |block_index| {
-            const block_range = self.getBlockStartEnd(block_index);
+            const block_range = self.getBlockRange(block_index);
 
             const input_block = if (block_range.end >= input.len) blk: {
                 // If we're at the last block, then our input block will be shorter than block_size
@@ -88,32 +129,46 @@ const InputBlocks = struct {
                 break :blk input[block_range.start..block_range.end];
             };
 
-            mem.copyBackwards(u8, self.data[block_range.start..block_range.end], input_block);
+            try self.setBlockData(block_index, input_block);
         }
     }
 
-    fn getBlockStartEnd(self: Self, block_index: usize) struct { start: usize, end: usize } {
+    fn getBlockRange(self: Self, block_index: usize) BlockRange {
         const block_start = block_index * self.block_size;
         const block_end = block_start + self.block_size;
         return .{ .start = block_start, .end = block_end };
     }
 
-    fn getBlock(self: Self, block_index: usize) []const u8 {
-        const block_range = self.getBlockStartEnd(block_index);
-        return self.data[block_range.start..block_range.end];
+    fn getBlock(self: Self, block_index: usize) Block {
+        const block_range = self.getBlockRange(block_index);
+        return Block{ .data = self.data[block_range.start..block_range.end] };
     }
 
-    fn setByteAtIndex(self: *Self, block_index: usize, byte_index: usize, byte: u8) void {
-        const block_start = self.getBlockStartEnd(block_index).start;
-        const raw_index = block_start + byte_index;
-        std.debug.assert(self.data[raw_index] == 0xaa);
+    fn setByteInBlockRange(self: *Self, block_range: BlockRange, relative_byte_index: usize, byte: ?u8) !void {
+        if (relative_byte_index >= block_range.end - block_range.start) {
+            return CryptoError.BlockTooShort;
+        }
+
+        const raw_index = block_range.start + relative_byte_index;
         self.data[raw_index] = byte;
     }
 
-    fn setBlock(self: *Self, block_index: usize, data: []const u8) void {
-        const block_range = self.getBlockStartEnd(block_index);
-        std.debug.assert(data.len == block_range.end - block_range.start);
-        std.mem.copyBackwards(u8, self.data[block_range.start..block_range.end], data);
+    fn setByteAtRelativeIndex(self: *Self, block_index: usize, relative_byte_index: usize, byte: ?u8) !void {
+        const block_range = self.getBlockRange(block_index);
+        try self.setByteInBlockRange(block_range, relative_byte_index, byte);
+    }
+
+    /// Only asserts that the block is long enough to contain all of `data`.
+    fn setBlockData(self: *Self, block_index: usize, data: []const u8) !void {
+        const block_range = self.getBlockRange(block_index);
+
+        if (data.len > block_range.end - block_range.start) {
+            return CryptoError.BlockTooShort;
+        }
+
+        for (data, 0..data.len) |byte, byte_index| {
+            try self.setByteInBlockRange(block_range, byte_index, byte);
+        }
     }
 
     fn transpose(self: Self) !Self {
@@ -123,8 +178,8 @@ const InputBlocks = struct {
 
         for (0..self.num_blocks) |block_index| {
             const block = self.getBlock(block_index);
-            for (block, 0..block.len) |byte, byte_index| {
-                transposed.setByteAtIndex(byte_index, block_index, byte);
+            for (block.data, 0..block.size()) |byte, byte_index| {
+                try transposed.setByteAtRelativeIndex(byte_index, block_index, byte);
             }
         }
 
@@ -135,10 +190,18 @@ const InputBlocks = struct {
         return BlockIterator.init(self);
     }
 
-    /// Returns the underlying buffer without padding at the end (if any)
-    fn trimmedData(self: Self) []const u8 {
-        const values_to_strip = [_]u8{default_pad_char};
-        return mem.trimRight(u8, self.data, values_to_strip[0..values_to_strip.len]);
+    /// Returns the underlying buffer without `nulls` at the end (if any).
+    /// Caller owns the returned memory.
+    fn dataTrimmed(self: Self) ![]u8 {
+        var data_trimmed = try std.ArrayList(u8).initCapacity(self.allocator, self.data.len);
+        for (self.data) |maybe_byte| {
+            if (maybe_byte) |byte| {
+                try data_trimmed.append(byte);
+            } else {
+                break;
+            }
+        }
+        return try data_trimmed.toOwnedSlice();
     }
 };
 
@@ -151,7 +214,7 @@ const BlockIterator = struct {
         return Self{ .blocks = blocks };
     }
 
-    fn next(self: *Self) ?[]const u8 {
+    fn next(self: *Self) ?Block {
         if (self.current_index >= self.blocks.num_blocks) {
             return null;
         }
@@ -189,35 +252,32 @@ pub const DecryptedRepeatingKeyOutput = struct {
     }
 };
 
-/// XORs bytes. If either of the two bytes is the `default_pad_char`, returns null.
-fn xorBytesExceptPad(a: u8, b: u8) ?u8 {
-    if (a == default_pad_char or b == default_pad_char) {
+/// XORs bytes. If either of the two bytes is `null`, returns `null`.
+fn xorMaybeBytes(a: ?u8, b: ?u8) ?u8 {
+    if (a == null or b == null) {
         return null;
     }
 
-    return a ^ b;
+    return a.? ^ b.?;
 }
 
-/// XORs bytes. If either of the two bytes is `PAD`, the behavior depends on the value of `should_xor_pad_char`.
+/// XORs bytes.
 ///
-/// If either of the characters is `PAD` and `ignore_pad` is `true`, this function XORs them anyway.
-/// If either character is `PAD` and `should_xor_pad_char` is `false`,
-/// returns `a` if `b == PAD` and `b` if `a == PAD`.
-/// Note that this means that if `should_xor_pad_char` is false and both `a` and `b` are `PAD`,
-/// then the output will be `PAD`.
-fn xorBytes(a: u8, b: u8, should_xor_pad_char: bool) u8 {
-    if (xorBytesExceptPad(a, b)) |result| {
+/// If either of the two bytes is `null`, returns the byte that isn't null.
+/// If both are `null`, returns `null`
+fn xorBytes(a: ?u8, b: ?u8) ?u8 {
+    if (xorMaybeBytes(a, b)) |result| {
         return result;
-    } else if (should_xor_pad_char) {
-        return a ^ b;
-    } else if (a == default_pad_char) {
-        return b;
-    } else {
-        return a;
+    } else if (a) |a_not_null| {
+        return a_not_null;
+    } else if (b) |b_not_null| {
+        return b_not_null;
     }
+
+    return null;
 }
 
-fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8, should_xor_pad_char: bool) ![]u8 {
+fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8 {
     if (buf1.len != buf2.len) {
         return CryptoError.UnequalLengthBuffers;
     }
@@ -227,7 +287,7 @@ fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8, shoul
     for (0..out.len) |index| {
         const byte1 = buf1[index];
         const byte2 = buf2[index];
-        out[index] = xorBytes(byte1, byte2, should_xor_pad_char);
+        out[index] = xorBytes(byte1, byte2) orelse default_pad_char;
     }
 
     return out;
@@ -244,7 +304,7 @@ pub fn fixedXorHex(allocator: Allocator, hex1: HexString, hex2: HexString) !HexS
     const buf2 = try hex2.decode(allocator);
     defer allocator.free(buf2);
 
-    const out_bytes = try fixedXorBytes(allocator, buf1, buf2, true);
+    const out_bytes = try fixedXorBytes(allocator, buf1, buf2);
     defer allocator.free(out_bytes);
 
     return try HexString.init(allocator, out_bytes);
@@ -306,7 +366,7 @@ pub fn xorWithRepeatingKey(allocator: Allocator, input: []const u8, key: []const
 
     for (input, 0..input.len) |input_byte, index| {
         const key_byte = key[index % key.len];
-        const encrypted_byte = xorBytes(input_byte, key_byte, true);
+        const encrypted_byte = xorBytes(input_byte, key_byte).?;
         raw_output[index] = encrypted_byte;
     }
 
@@ -371,7 +431,7 @@ fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: u
 
         try key_bytes.append(best_key.?);
         total_key_score += best_score;
-        transposed_blocks.setBlock(block_index, best_decryption_block);
+        transposed_blocks.setBlockStrict(block_index, best_decryption_block);
         block_index += 1;
     }
 
@@ -424,16 +484,14 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
 
 test "fast XOR bytes" {
     const a: u8 = 'a';
-    const b = default_pad_char;
+    const b: ?u8 = null;
 
-    // XOR'ing with pad returns the non-PAD input
-    try testing.expectEqual(a, xorBytes(a, b, false));
-    // ... unless we tell xorBytes to XOR with the PAD character anyway
-    try testing.expectEqual(a ^ b, xorBytes(a, b, true));
-    // when both inputs are PAD, we get PAD if we don't XOR with the other PAD
-    try testing.expectEqual(b, xorBytes(b, b, false));
-    // ... unless we tell xorBytes to XOR with the PAD character
-    try testing.expectEqual(b ^ b, xorBytes(b, b, true));
+    // XOR'ing with non-null inputs is a regular XOR
+    try testing.expectEqual(a ^ a, xorBytes(a, a));
+    // XOR'ing with null returns the non-null input
+    try testing.expectEqual(a, xorBytes(a, b));
+    // when both inputs are null, we get null
+    try testing.expectEqual(null, xorBytes(b, b));
 }
 
 test "fast fixed xor" {
@@ -537,17 +595,23 @@ test "fast make and transpose blocks" {
 
     var block_iterator = transposed_blocks.iter();
 
-    const expected_blocks: [3]*const [6]u8 = .{ "AABCDD", "ABBCD\x80", "ABCCD\x80" };
+    const expected_blocks: [3]*const [6]u8 = .{ "AABCDD", "ABBCD", "ABCCD" };
 
     var block_index: usize = 0;
     while (block_iterator.next()) |block| {
-        try testing.expectStringStartsWith(block, expected_blocks[block_index][0..block.len]);
+        const block_non_null = try block.dataTrimmed(allocator);
+        defer allocator.free(block_non_null);
+
+        try testing.expectStringStartsWith(block_non_null, expected_blocks[block_index][0..block.sizeTrimmed()]);
         block_index += 1;
     }
 
     var untransposed_blocks = try transposed_blocks.transpose();
     defer untransposed_blocks.deinit();
-    try testing.expectEqualStrings(test_input, untransposed_blocks.trimmedData());
+    const untransposed_data = try untransposed_blocks.dataTrimmed();
+    defer allocator.free(untransposed_data);
+
+    try testing.expectEqualStrings(test_input, untransposed_data);
 }
 
 test "break repeating-key XOR" {
