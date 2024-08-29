@@ -22,7 +22,35 @@ pub const CryptoError = error{
     BufferTooShort,
 };
 
-fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8 {
+/// XORs bytes. If either of the two bytes is the `default_pad_char`, returns null.
+fn xorBytesExceptPad(a: u8, b: u8) ?u8 {
+    if (a == default_pad_char or b == default_pad_char) {
+        return null;
+    }
+
+    return a ^ b;
+}
+
+/// XORs bytes. If either of the two bytes is `PAD`, the behavior depends on the value of `ignore_pad`.
+///
+/// If either of the characters is `PAD` and `ignore_pad` is `true`, this function XORs them anyway.
+/// If either character is `PAD` and `ignore_pad` is `false`,
+/// returns `a` if `b == PAD` and `b` if `a == PAD`.
+/// Note that this means that if `ignore_pad` is false and both `a` and `b` are `PAD`,
+/// then the output will be `PAD`.
+fn xorBytes(a: u8, b: u8, ignore_pad: bool) u8 {
+    if (xorBytesExceptPad(a, b)) |result| {
+        return result;
+    } else if (ignore_pad) {
+        return a ^ b;
+    } else if (a == default_pad_char) {
+        return b;
+    } else {
+        return a;
+    }
+}
+
+fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8, ignore_pad_char: bool) ![]u8 {
     if (buf1.len != buf2.len) {
         return CryptoError.UnequalLengthBuffers;
     }
@@ -33,7 +61,12 @@ fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8
         const byte1 = buf1[index];
         const byte2 = buf2[index];
 
-        out[index] = byte1 ^ byte2;
+        if (xorBytesExceptPad(byte1, byte2)) |result| {
+            out[index] = result;
+        } else if (ignore_pad_char) {} else {
+            // XOR the pad char anyway since we aren't ignoring it
+            out[index] = byte1 ^ byte2;
+        }
     }
 
     return out;
@@ -50,7 +83,7 @@ pub fn fixedXorHex(allocator: Allocator, hex1: HexString, hex2: HexString) !HexS
     const buf2 = try hex2.decode(allocator);
     defer allocator.free(buf2);
 
-    const out_bytes = try fixedXorBytes(allocator, buf1, buf2);
+    const out_bytes = try fixedXorBytes(allocator, buf1, buf2, true);
     defer allocator.free(out_bytes);
 
     return try HexString.init(allocator, out_bytes);
@@ -112,7 +145,7 @@ pub fn xorWithRepeatingKey(allocator: Allocator, input: []const u8, key: []const
 
     for (input, 0..input.len) |input_byte, index| {
         const key_byte = key[index % key.len];
-        const encrypted_byte = input_byte ^ key_byte;
+        const encrypted_byte = xorBytes(input_byte, key_byte, true);
         raw_output[index] = encrypted_byte;
     }
 
@@ -250,7 +283,8 @@ const InputBlocks = struct {
 
     /// Returns the underlying buffer without padding at the end (if any)
     fn trimmedData(self: Self) []const u8 {
-        return mem.trimRight(u8, self.data, [_]u8{ default_pad_char, "\x00" });
+        const values_to_strip = [_]u8{default_pad_char};
+        return mem.trimRight(u8, self.data, values_to_strip[0..values_to_strip.len]);
     }
 };
 
@@ -397,6 +431,13 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
         defer candidate.deinit();
     }
     return best_candidate;
+}
+
+test "fast XOR bytes" {
+    const a: u8 = 'a';
+    const b = default_pad_char;
+
+    try testing.expectEqual(xorBytes(a, b, true), a);
 }
 
 test "fast fixed xor" {
@@ -546,5 +587,6 @@ test "break repeating-key XOR" {
     const unencrypted_input = try dir.readFileAlloc(allocator, unencrypted_filename, max_line_len);
     defer allocator.free(unencrypted_input);
 
+    // TODO deal with XOR'd padding characters
     try testing.expectEqualStrings(unencrypted_input, decrypted.output);
 }
