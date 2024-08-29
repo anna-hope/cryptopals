@@ -31,17 +31,17 @@ fn xorBytesExceptPad(a: u8, b: u8) ?u8 {
     return a ^ b;
 }
 
-/// XORs bytes. If either of the two bytes is `PAD`, the behavior depends on the value of `ignore_pad`.
+/// XORs bytes. If either of the two bytes is `PAD`, the behavior depends on the value of `should_xor_pad_char`.
 ///
 /// If either of the characters is `PAD` and `ignore_pad` is `true`, this function XORs them anyway.
-/// If either character is `PAD` and `ignore_pad` is `false`,
+/// If either character is `PAD` and `should_xor_pad_char` is `false`,
 /// returns `a` if `b == PAD` and `b` if `a == PAD`.
-/// Note that this means that if `ignore_pad` is false and both `a` and `b` are `PAD`,
+/// Note that this means that if `should_xor_pad_char` is false and both `a` and `b` are `PAD`,
 /// then the output will be `PAD`.
-fn xorBytes(a: u8, b: u8, ignore_pad: bool) u8 {
+fn xorBytes(a: u8, b: u8, should_xor_pad_char: bool) u8 {
     if (xorBytesExceptPad(a, b)) |result| {
         return result;
-    } else if (ignore_pad) {
+    } else if (should_xor_pad_char) {
         return a ^ b;
     } else if (a == default_pad_char) {
         return b;
@@ -50,7 +50,7 @@ fn xorBytes(a: u8, b: u8, ignore_pad: bool) u8 {
     }
 }
 
-fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8, ignore_pad_char: bool) ![]u8 {
+fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8, should_xor_pad_char: bool) ![]u8 {
     if (buf1.len != buf2.len) {
         return CryptoError.UnequalLengthBuffers;
     }
@@ -60,13 +60,7 @@ fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8, ignor
     for (0..out.len) |index| {
         const byte1 = buf1[index];
         const byte2 = buf2[index];
-
-        if (xorBytesExceptPad(byte1, byte2)) |result| {
-            out[index] = result;
-        } else if (ignore_pad_char) {} else {
-            // XOR the pad char anyway since we aren't ignoring it
-            out[index] = byte1 ^ byte2;
-        }
+        out[index] = xorBytes(byte1, byte2, should_xor_pad_char);
     }
 
     return out;
@@ -437,7 +431,14 @@ test "fast XOR bytes" {
     const a: u8 = 'a';
     const b = default_pad_char;
 
-    try testing.expectEqual(xorBytes(a, b, true), a);
+    // XOR'ing with pad returns the non-PAD input
+    try testing.expectEqual(a, xorBytes(a, b, false));
+    // ... unless we tell xorBytes to XOR with the PAD character anyway
+    try testing.expectEqual(a ^ b, xorBytes(a, b, true));
+    // when both inputs are PAD, we get PAD if we don't XOR with the other PAD
+    try testing.expectEqual(b, xorBytes(b, b, false));
+    // ... unless we tell xorBytes to XOR with the PAD character
+    try testing.expectEqual(b ^ b, xorBytes(b, b, true));
 }
 
 test "fast fixed xor" {
@@ -587,6 +588,5 @@ test "break repeating-key XOR" {
     const unencrypted_input = try dir.readFileAlloc(allocator, unencrypted_filename, max_line_len);
     defer allocator.free(unencrypted_input);
 
-    // TODO deal with XOR'd padding characters
     try testing.expectEqualStrings(unencrypted_input, decrypted.output);
 }
