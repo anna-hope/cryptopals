@@ -387,7 +387,7 @@ fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
 
     const first_chunk = input[0..chunk_len];
     const second_chunk = input[chunk_len .. chunk_len * 2];
-    const distance = try string_utils.computeHammingDistance(first_chunk, second_chunk);
+    const distance = try string_utils.hammingDistance(first_chunk, second_chunk);
     return @as(f32, @floatFromInt(distance)) / @as(f32, @floatFromInt(chunk_len));
 }
 

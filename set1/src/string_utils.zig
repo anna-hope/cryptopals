@@ -123,7 +123,7 @@ pub fn scoreString(string: []const u8, char_frequencies: char_frequency_map) f32
     return score / @as(f32, @floatFromInt(string.len));
 }
 
-pub fn computeHammingDistance(buf1: []const u8, buf2: []const u8) !usize {
+pub fn hammingDistance(buf1: []const u8, buf2: []const u8) !usize {
     if (buf1.len != buf2.len) {
         return StringUtilsError.UnequalLengthBuffers;
     }
@@ -151,5 +151,5 @@ test "fast hex to base64" {
 test "fast hamming distance" {
     const input1 = "this is a test";
     const input2 = "wokka wokka!!!";
-    try testing.expectEqual(37, computeHammingDistance(input1, input2));
+    try testing.expectEqual(37, hammingDistance(input1, input2));
 }
