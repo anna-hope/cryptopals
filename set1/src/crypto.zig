@@ -214,8 +214,6 @@ const InputBlocks = struct {
                 try data_trimmed.append(byte);
             } else if (should_pad) {
                 try data_trimmed.append(default_pad_char);
-            } else {
-                break;
             }
         }
         return try data_trimmed.toOwnedSlice();
@@ -451,9 +449,12 @@ fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: u
     }
 
     // Now that each transposed block is set to its decrypted value, we can get back the original input
-    const original_blocks_decrypted = try transposed_blocks.transpose();
+    var original_blocks_decrypted = try transposed_blocks.transpose();
+    defer original_blocks_decrypted.deinit();
+
     const key = try key_bytes.toOwnedSlice();
-    return DecryptedRepeatingKeyOutput.init(allocator, key, original_blocks_decrypted.data, total_key_score);
+    const decrypted_data = try original_blocks_decrypted.dataTrimmed(false);
+    return DecryptedRepeatingKeyOutput.init(allocator, key, decrypted_data, total_key_score);
 }
 
 pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_len: usize, max_key_len: usize, vocab: [][]u8) !DecryptedRepeatingKeyOutput {
@@ -661,8 +662,7 @@ test "break repeating-key XOR" {
     var words = try helpers.readLines(allocator, root_dir, dict_path, null);
     defer words.deinit();
 
-    // TODO don't hardcode the known key length
-    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 4, 4, words.data);
+    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 10, words.data);
     defer allocator.free(decrypted.output);
     defer allocator.free(decrypted.key);
 
