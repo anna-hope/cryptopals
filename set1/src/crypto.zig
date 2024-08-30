@@ -144,13 +144,19 @@ const InputBlocks = struct {
         return Block{ .data = self.data[block_range.start..block_range.end] };
     }
 
+    /// Replaces PAD with null.
     fn setByteInBlockRange(self: *Self, block_range: BlockRange, relative_byte_index: usize, byte: ?u8) !void {
         if (relative_byte_index >= block_range.end - block_range.start) {
             return CryptoError.BlockTooShort;
         }
 
         const raw_index = block_range.start + relative_byte_index;
-        self.data[raw_index] = byte;
+        const byte_to_set: ?u8 = if (byte == default_pad_char) blk: {
+            break :blk null;
+        } else blk: {
+            break :blk byte;
+        };
+        self.data[raw_index] = byte_to_set;
     }
 
     fn setByteAtRelativeIndex(self: *Self, block_index: usize, relative_byte_index: usize, byte: ?u8) !void {
@@ -159,15 +165,24 @@ const InputBlocks = struct {
     }
 
     /// Only asserts that the block is long enough to contain all of `data`.
+    /// If data is shorter than the block, pads the rest of the block with nulls.
     fn setBlockData(self: *Self, block_index: usize, data: []const u8) !void {
         const block_range = self.getBlockRange(block_index);
+        const block_len = block_range.end - block_range.start;
 
-        if (data.len > block_range.end - block_range.start) {
+        if (data.len > block_len) {
             return CryptoError.BlockTooShort;
         }
 
+        var last_index: usize = 0;
         for (data, 0..data.len) |byte, byte_index| {
             try self.setByteInBlockRange(block_range, byte_index, byte);
+            last_index += 1;
+        }
+
+        // Set any remaining bytes in block to null.
+        while (last_index < block_len) : (last_index += 1) {
+            try self.setByteInBlockRange(block_range, last_index, null);
         }
     }
 
@@ -192,11 +207,13 @@ const InputBlocks = struct {
 
     /// Returns the underlying buffer without `nulls` at the end (if any).
     /// Caller owns the returned memory.
-    fn dataTrimmed(self: Self) ![]u8 {
+    fn dataTrimmed(self: Self, should_pad: bool) ![]u8 {
         var data_trimmed = try std.ArrayList(u8).initCapacity(self.allocator, self.data.len);
         for (self.data) |maybe_byte| {
             if (maybe_byte) |byte| {
                 try data_trimmed.append(byte);
+            } else if (should_pad) {
+                try data_trimmed.append(default_pad_char);
             } else {
                 break;
             }
@@ -265,16 +282,8 @@ fn xorMaybeBytes(a: ?u8, b: ?u8) ?u8 {
 ///
 /// If either of the two bytes is `null`, returns the byte that isn't null.
 /// If both are `null`, returns `null`
-fn xorBytes(a: ?u8, b: ?u8) ?u8 {
-    if (xorMaybeBytes(a, b)) |result| {
-        return result;
-    } else if (a) |a_not_null| {
-        return a_not_null;
-    } else if (b) |b_not_null| {
-        return b_not_null;
-    }
-
-    return null;
+fn xorBytes(a: u8, b: u8) u8 {
+    return a ^ b;
 }
 
 fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8 {
@@ -287,7 +296,7 @@ fn fixedXorBytes(allocator: Allocator, buf1: []const u8, buf2: []const u8) ![]u8
     for (0..out.len) |index| {
         const byte1 = buf1[index];
         const byte2 = buf2[index];
-        out[index] = xorBytes(byte1, byte2) orelse default_pad_char;
+        out[index] = xorBytes(byte1, byte2);
     }
 
     return out;
@@ -315,7 +324,7 @@ fn decryptXordSingleByteKey(allocator: Allocator, input: []const u8, key_byte: u
     key_candidate.appendNTimesAssumeCapacity(key_byte, input.len);
     const key_candidate_slice = key_candidate.slice();
 
-    const decrypted_candidate = try fixedXorBytes(allocator, input, key_candidate_slice, false);
+    const decrypted_candidate = try fixedXorBytes(allocator, input, key_candidate_slice);
     return decrypted_candidate;
 }
 
@@ -366,7 +375,7 @@ pub fn xorWithRepeatingKey(allocator: Allocator, input: []const u8, key: []const
 
     for (input, 0..input.len) |input_byte, index| {
         const key_byte = key[index % key.len];
-        const encrypted_byte = xorBytes(input_byte, key_byte).?;
+        const encrypted_byte = xorBytes(input_byte, key_byte);
         raw_output[index] = encrypted_byte;
     }
 
@@ -398,7 +407,10 @@ fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: u
 
     // Solve each block as if it was single-character XOR
     while (transposed_blocks_iter.next()) |block| {
-        const decrypted = try decryptXordBytes(allocator, block, char_frequencies);
+        const block_data = try block.dataTrimmed(allocator);
+        defer allocator.free(block_data);
+
+        const decrypted = try decryptXordBytes(allocator, block_data, char_frequencies);
         defer allocator.free(decrypted.output);
         try key_candidates.append(decrypted.key);
     }
@@ -414,11 +426,14 @@ fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: u
         var best_key: ?u8 = null;
         var best_score: f32 = 0.0;
 
-        const best_decryption_block = try allocator.alloc(u8, block.len);
+        const best_decryption_block = try allocator.alloc(u8, block.size());
         defer allocator.free(best_decryption_block);
 
         for (key_candidates.items) |key| {
-            const decrypted = try decryptXordSingleByteKey(allocator, block, key);
+            const block_data_trimmed = try block.dataTrimmed(allocator);
+            defer allocator.free(block_data_trimmed);
+
+            const decrypted = try decryptXordSingleByteKey(allocator, block_data_trimmed, key);
             defer allocator.free(decrypted);
 
             const score = string_utils.scoreString(decrypted, char_frequencies);
@@ -431,7 +446,7 @@ fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: u
 
         try key_bytes.append(best_key.?);
         total_key_score += best_score;
-        transposed_blocks.setBlockStrict(block_index, best_decryption_block);
+        try transposed_blocks.setBlockData(block_index, best_decryption_block);
         block_index += 1;
     }
 
@@ -480,18 +495,6 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
         defer candidate.deinit();
     }
     return best_candidate;
-}
-
-test "fast XOR bytes" {
-    const a: u8 = 'a';
-    const b: ?u8 = null;
-
-    // XOR'ing with non-null inputs is a regular XOR
-    try testing.expectEqual(a ^ a, xorBytes(a, a));
-    // XOR'ing with null returns the non-null input
-    try testing.expectEqual(a, xorBytes(a, b));
-    // when both inputs are null, we get null
-    try testing.expectEqual(null, xorBytes(b, b));
 }
 
 test "fast fixed xor" {
@@ -582,6 +585,28 @@ test "fast get normalized edit distance for chunks" {
     try testing.expectApproxEqAbs(2.0, normalized_distance2, 1e-5);
 }
 
+test "fast set blocks with unequal size data" {
+    const allocator = testing.allocator;
+
+    const test_input = "AAABB";
+    const block_size = 3;
+
+    var blocks = try InputBlocks.initWithData(allocator, test_input, @as(u8, block_size));
+    defer blocks.deinit();
+    const expected_1 = [block_size]?u8{ 'B', 'B', null };
+
+    // The second block should be padded with 1 null since our block_size is 3
+    try testing.expectEqualSlices(?u8, &expected_1, blocks.getBlock(1).data);
+
+    // If we then set the second block with an ever shorter slice, it should have 2 nulls
+    try blocks.setBlockData(1, "B");
+    const expected_2 = [block_size]?u8{ 'B', null, null };
+    try testing.expectEqualSlices(?u8, &expected_2, blocks.getBlock(1).data);
+
+    // If we set it with a slice longer than 3, we should get an error.
+    try testing.expectError(CryptoError.BlockTooShort, blocks.setBlockData(1, "BBBB"));
+}
+
 test "fast make and transpose blocks" {
     const allocator = testing.allocator;
 
@@ -608,7 +633,7 @@ test "fast make and transpose blocks" {
 
     var untransposed_blocks = try transposed_blocks.transpose();
     defer untransposed_blocks.deinit();
-    const untransposed_data = try untransposed_blocks.dataTrimmed();
+    const untransposed_data = try untransposed_blocks.dataTrimmed(false);
     defer allocator.free(untransposed_data);
 
     try testing.expectEqualStrings(test_input, untransposed_data);
