@@ -385,10 +385,32 @@ fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
         return CryptoError.BufferTooShort;
     }
 
-    const first_chunk = input[0..chunk_len];
-    const second_chunk = input[chunk_len .. chunk_len * 2];
-    const distance = try string_utils.hammingDistance(first_chunk, second_chunk);
-    return @as(f32, @floatFromInt(distance)) / @as(f32, @floatFromInt(chunk_len));
+    // "take 4 KEYSIZE blocks ... and average the distances"
+    const max_windows: usize = 2;
+    const window_size = chunk_len * max_windows;
+    var total_distance: f32 = 0.0;
+    var window_iterator = mem.window(u8, input, window_size, window_size);
+    var current_window: usize = 0;
+
+    std.debug.print("\nCHUNK LENGTH: {d}\n", .{chunk_len});
+
+    while (window_iterator.next()) |window| : (current_window += 1) {
+        if (current_window == max_windows) {
+            break;
+        }
+
+        const first_chunk = window[0..chunk_len];
+        const second_chunk = window[chunk_len..window_size];
+        const distance = try string_utils.hammingDistance(first_chunk, second_chunk);
+        const normalized_distance = @as(f32, @floatFromInt(distance)) / @as(f32, @floatFromInt(chunk_len));
+        total_distance += normalized_distance;
+
+        std.debug.print("first chunk:   {b:08}\n", .{first_chunk});
+        std.debug.print("second chunk:  {b:08}\n", .{second_chunk});
+        std.debug.print("absolute distance: {d}, normalized distance: {any}\n", .{ distance, normalized_distance });
+    }
+
+    return total_distance / @as(f32, @floatFromInt(current_window));
 }
 
 fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: usize, char_frequencies: char_frequency_map) !DecryptedRepeatingKeyOutput {
@@ -466,6 +488,7 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
 
     for (min_key_len..max_key_len + 1) |key_size| {
         const distance = try getNormalizedChunkEditDistance(input_raw, key_size);
+        std.debug.print("mean normalized distance: {any}\n", .{distance});
         try queue.add(KeySize{ .distance = distance, .size = key_size });
     }
 
@@ -640,7 +663,7 @@ test "fast make and transpose blocks" {
     try testing.expectEqualStrings(test_input, untransposed_data);
 }
 
-test "break repeating-key XOR" {
+test "break repeating-key XOR jane" {
     const helpers = @import("helpers.zig");
     const allocator = testing.allocator;
 
@@ -670,6 +693,40 @@ test "break repeating-key XOR" {
 
     const unencrypted_filename = "data/pride_prejudice.txt";
     const unencrypted_input = try dir.readFileAlloc(allocator, unencrypted_filename, max_line_len);
+    defer allocator.free(unencrypted_input);
+
+    try testing.expectEqualStrings(unencrypted_input, decrypted.output);
+}
+
+test "break repeating-key XOR mary" {
+    const helpers = @import("helpers.zig");
+    const allocator = testing.allocator;
+
+    const encrypted_filename = "data/frankenstein_encrypted_mary.txt";
+    const dir = fs.cwd();
+
+    // Use readlines because the file may have ... multiple lines
+    var input_lines = try helpers.readLines(allocator, dir, encrypted_filename, null);
+    defer input_lines.deinit();
+
+    const input = try mem.concat(allocator, u8, input_lines.data);
+    defer allocator.free(input);
+
+    const b64input = Base64String.initFromBase64(input);
+
+    const root_dir = try fs.openDirAbsolute("/", .{});
+    const dict_path = "/usr/share/dict/words";
+    var words = try helpers.readLines(allocator, root_dir, dict_path, null);
+    defer words.deinit();
+
+    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 10, words.data);
+    defer allocator.free(decrypted.output);
+    defer allocator.free(decrypted.key);
+
+    try testing.expectEqualStrings("mary", decrypted.key);
+
+    const unencrypted_filename = "data/frankenstein.txt";
+    const unencrypted_input = try dir.readFileAlloc(allocator, unencrypted_filename, 1024);
     defer allocator.free(unencrypted_input);
 
     try testing.expectEqualStrings(unencrypted_input, decrypted.output);
