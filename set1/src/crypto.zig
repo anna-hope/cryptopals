@@ -318,9 +318,11 @@ pub fn fixedXorHex(allocator: Allocator, hex1: HexString, hex2: HexString) !HexS
 }
 
 fn decryptXordSingleByteKey(allocator: Allocator, input: []const u8, key_byte: u8) ![]u8 {
-    var key_candidate = try std.BoundedArray(u8, 1024).init(0);
-    key_candidate.appendNTimesAssumeCapacity(key_byte, input.len);
-    const key_candidate_slice = key_candidate.slice();
+    var key_candidate = std.ArrayList(u8).init(allocator);
+    try key_candidate.appendNTimes(key_byte, input.len);
+
+    const key_candidate_slice = try key_candidate.toOwnedSlice();
+    defer allocator.free(key_candidate_slice);
 
     const decrypted_candidate = try fixedXorBytes(allocator, input, key_candidate_slice);
     return decrypted_candidate;
