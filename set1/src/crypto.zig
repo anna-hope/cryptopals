@@ -383,38 +383,46 @@ pub fn xorWithRepeatingKey(allocator: Allocator, input: []const u8, key: []const
     return raw_output;
 }
 
+fn getNormalizedDistance(input1: []const u8, input2: []const u8) !f32 {
+    if (input1.len != input2.len) {
+        return CryptoError.UnequalLengthBuffers;
+    }
+
+    const distance = try string_utils.hammingDistance(input1, input2);
+    const normalized_distance = @as(f32, @floatFromInt(distance)) / @as(f32, @floatFromInt(input1.len));
+    return normalized_distance;
+}
+
 fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
     if (chunk_len * 2 > input.len) {
         return CryptoError.BufferTooShort;
     }
 
-    // "take 4 KEYSIZE blocks ... and average the distances"
-    const window_size = chunk_len * 2;
-    const max_chunks = 4;
-    const max_windows: usize = max_chunks - 1; // Go over all the chunks in each window without going beyond max_chunks
-    var total_distance: f32 = 0.0;
-    var window_iterator = mem.window(u8, input, window_size, chunk_len);
-    var current_window: usize = 0;
+    // https://github.com/vijithassar/cryptopals-literate-python/blob/master/challenge06.py.md
+    // Specifically "the first and second key size chunks must be tested against the whole ciphertext
+    // instead of simply against each other"
+    const first_chunk = input[0..chunk_len];
+    const second_chunk = input[chunk_len .. chunk_len * 2];
 
-    std.debug.print("\nCHUNK LENGTH: {d}\n", .{chunk_len});
+    var total_distance = try getNormalizedDistance(first_chunk, second_chunk);
+    var times_compared: usize = 1; // 1 because we've just compared the first two chunks.
 
-    while (window_iterator.next()) |window| : (current_window += 1) {
-        if (current_window == max_windows) {
+    var window_iterator = mem.window(u8, input[chunk_len * 2 .. input.len], chunk_len, chunk_len);
+    while (window_iterator.next()) |window| {
+        if (window.len < chunk_len) {
+            // Last chunk might be shorter.
             break;
         }
 
-        const first_chunk = window[0..chunk_len];
-        const second_chunk = window[chunk_len..window_size];
-        const distance = try string_utils.hammingDistance(first_chunk, second_chunk);
-        const normalized_distance = @as(f32, @floatFromInt(distance)) / @as(f32, @floatFromInt(chunk_len));
-        total_distance += normalized_distance;
+        const distance1 = try getNormalizedDistance(first_chunk, window);
+        const distance2 = try getNormalizedDistance(second_chunk, window);
+        const distance = (distance1 + distance2) / 2.0;
 
-        std.debug.print("first chunk:   {b:08}\n", .{first_chunk});
-        std.debug.print("second chunk:  {b:08}\n", .{second_chunk});
-        std.debug.print("absolute distance: {d}, normalized distance: {any}\n", .{ distance, normalized_distance });
+        total_distance += distance;
+        times_compared += 1;
     }
 
-    return total_distance / @as(f32, @floatFromInt(current_window));
+    return total_distance / @as(f32, @floatFromInt(times_compared));
 }
 
 fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: usize, char_frequencies: char_frequency_map) !DecryptedRepeatingKeyOutput {
@@ -492,7 +500,6 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
 
     for (min_key_len..max_key_len + 1) |key_size| {
         const distance = try getNormalizedChunkEditDistance(input_raw, key_size);
-        std.debug.print("KEYSIZE: {d}; mean normalized distance: {any}\n", .{ key_size, distance });
         try queue.add(KeySize{ .distance = distance, .size = key_size });
     }
 
