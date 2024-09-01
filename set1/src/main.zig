@@ -113,8 +113,9 @@ pub fn main() !void {
             }
         } else if (mem.eql(u8, some_mode, "decrypt")) {
             if (decrypt(allocator, &args_iterator)) |decrypted| {
-                try stdout.print("brute forced encryption key: {s}\n", .{decrypted.key});
+                try stdout.print("brute forced encryption key: '{s}'\n", .{decrypted.key});
                 output = decrypted.output;
+                try stdout.print("BEGIN DECRYPTED TEXT:\n-----\n", .{});
             } else |err| {
                 switch (err) {
                     error.NotEnoughArguments => {
