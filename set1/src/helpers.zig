@@ -4,7 +4,7 @@ const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 
-const default_max_line_len: usize = 1024;
+const default_max_line_len: usize = 2048;
 
 pub const Lines = struct {
     const Self = @This();
