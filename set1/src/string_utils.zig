@@ -6,7 +6,7 @@ const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 
-pub const alphabet_chars = base64.standard_alphabet_chars;
+pub const alphabet_chars = [_]u8{ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '!', '\"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', ' ', '\t', '\n', '\r', '\x0b', '\x0c' };
 pub const char_frequency_map = std.AutoHashMap(u8, f32);
 
 const StringUtilsError = error{
@@ -72,6 +72,14 @@ pub const Base64String = struct {
             allocator.free(self.buf);
         }
     }
+
+    pub fn decode(self: Self, allocator: Allocator) ![]u8 {
+        const decoder = base64.Base64Decoder.init(base64.standard.alphabet_chars, base64.standard.pad_char);
+        const output_size = try decoder.calcSizeForSlice(self.buf);
+        const out = try allocator.alloc(u8, output_size);
+        try decoder.decode(out, self.buf);
+        return out;
+    }
 };
 
 pub fn hexToBase64(allocator: Allocator, source: HexString) !Base64String {
@@ -115,7 +123,7 @@ pub fn scoreString(string: []const u8, char_frequencies: char_frequency_map) f32
     return score / @as(f32, @floatFromInt(string.len));
 }
 
-pub fn computeHammingDistance(buf1: []const u8, buf2: []const u8) !usize {
+pub fn hammingDistance(buf1: []const u8, buf2: []const u8) !usize {
     if (buf1.len != buf2.len) {
         return StringUtilsError.UnequalLengthBuffers;
     }
@@ -143,5 +151,5 @@ test "fast hex to base64" {
 test "fast hamming distance" {
     const input1 = "this is a test";
     const input2 = "wokka wokka!!!";
-    try testing.expectEqual(37, computeHammingDistance(input1, input2));
+    try testing.expectEqual(37, hammingDistance(input1, input2));
 }

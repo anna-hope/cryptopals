@@ -2,9 +2,11 @@
 <project version="4">
   <component name="ZLSSettings">
     <option name="zlsPath" value="$USER_HOME$/zls/zig-out/bin/zls" />
-    <option name="debug" value="true" />
+    <option name="highlightGlobalVarDeclarations" value="true" />
   </component>
   <component name="ZigProjectSettings">
+    <option name="overrideStdPath" value="true" />
+    <option name="explicitPathToStd" value="$USER_HOME$/zig-0.14/lib" />
     <option name="toolchainHomeDirectory" value="$USER_HOME$/zig-0.14" />
   </component>
 </project>
