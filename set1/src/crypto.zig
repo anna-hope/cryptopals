@@ -263,7 +263,8 @@ pub const DecryptedRepeatingKeyOutput = struct {
     pub fn compareMeanScore(_: void, self: Self, other: Self) math.Order {
         const this_mean_score = self.getKeyMeanScore();
         const other_mean_score = other.getKeyMeanScore();
-        return math.order(this_mean_score, other_mean_score);
+        // Have to invert the order because we want the higher scoring key to come first
+        return math.order(this_mean_score, other_mean_score).invert();
     }
 };
 
@@ -388,10 +389,11 @@ fn getNormalizedChunkEditDistance(input: []const u8, chunk_len: usize) !f32 {
     }
 
     // "take 4 KEYSIZE blocks ... and average the distances"
-    const max_windows: usize = 2;
-    const window_size = chunk_len * max_windows;
+    const window_size = chunk_len * 2;
+    const max_chunks = 4;
+    const max_windows: usize = max_chunks - 1; // Go over all the chunks in each window without going beyond max_chunks
     var total_distance: f32 = 0.0;
-    var window_iterator = mem.window(u8, input, window_size, window_size);
+    var window_iterator = mem.window(u8, input, window_size, chunk_len);
     var current_window: usize = 0;
 
     std.debug.print("\nCHUNK LENGTH: {d}\n", .{chunk_len});
@@ -490,7 +492,7 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
 
     for (min_key_len..max_key_len + 1) |key_size| {
         const distance = try getNormalizedChunkEditDistance(input_raw, key_size);
-        std.debug.print("mean normalized distance: {any}\n", .{distance});
+        std.debug.print("KEYSIZE: {d}; mean normalized distance: {any}\n", .{ key_size, distance });
         try queue.add(KeySize{ .distance = distance, .size = key_size });
     }
 
@@ -513,7 +515,7 @@ pub fn breakRepeatingKeyXor(allocator: Allocator, input: Base64String, min_key_l
         try decrypted_candidates.add(decrypted);
     }
 
-    // Find the best decrypted candidate based on mean key score
+    // Find the best decrypted candidate based on highest mean key score
     const best_candidate = decrypted_candidates.remove();
 
     while (decrypted_candidates.count() > 0) {
