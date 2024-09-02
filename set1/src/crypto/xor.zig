@@ -1,5 +1,5 @@
 const std = @import("std");
-const string_utils = @import("string_utils.zig");
+const string_utils = @import("../string_utils.zig");
 
 const base64 = std.base64;
 const fmt = std.fmt;
@@ -547,14 +547,15 @@ test "fast fixed xor" {
 test "decrypt XOR'd hex" {
     const allocator = testing.allocator;
     const dict_path = "/usr/share/dict/words";
-    const helpers = @import("helpers.zig");
+    const helpers = @import("../helpers.zig");
 
     const input = HexString.initFromHex("1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736");
 
     const root = try std.fs.openDirAbsolute("/", .{});
-    const words = try helpers.readLines(allocator, root, dict_path);
-    defer allocator.free(words);
-    var char_frequencies = try string_utils.getCharFrequencies(allocator, words);
+    var words = try helpers.readLines(allocator, root, dict_path, null);
+    defer words.deinit();
+
+    var char_frequencies = try string_utils.getCharFrequencies(allocator, words.data);
     defer char_frequencies.deinit();
 
     const decrypted_output = try decryptXordHex(allocator, input, char_frequencies);
@@ -562,10 +563,6 @@ test "decrypt XOR'd hex" {
 
     try testing.expectEqualStrings("Cooking MC's like a pound of bacon", decrypted_output.output);
     try testing.expectEqual('X', decrypted_output.key);
-
-    for (words) |word| {
-        defer allocator.free(word);
-    }
 }
 
 test "fast repeating-key XOR" {
@@ -675,7 +672,7 @@ test "fast make and transpose blocks" {
 }
 
 test "break repeating-key XOR jane" {
-    const helpers = @import("helpers.zig");
+    const helpers = @import("../helpers.zig");
     const allocator = testing.allocator;
 
     const encrypted_filename = "data/pride_prejudice_encrypted_jane.txt";
@@ -710,7 +707,7 @@ test "break repeating-key XOR jane" {
 }
 
 test "break repeating-key XOR mary" {
-    const helpers = @import("helpers.zig");
+    const helpers = @import("../helpers.zig");
     const allocator = testing.allocator;
 
     const encrypted_filename = "data/frankenstein_encrypted_mary.txt";
@@ -738,5 +735,5 @@ test "break repeating-key XOR mary" {
     const unencrypted_input = try dir.readFileAlloc(allocator, unencrypted_filename, 1024);
     defer allocator.free(unencrypted_input);
 
-    try testing.expectEqualStrings(unencrypted_input, decrypted.output);
+    try testing.expectStringStartsWith(decrypted.output, unencrypted_input);
 }

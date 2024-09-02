@@ -6,7 +6,7 @@ const process = std.process;
 
 const Allocator = mem.Allocator;
 
-const crypto = @import("crypto.zig");
+const crypto = @import("crypto/xor.zig");
 const helpers = @import("helpers.zig");
 const string_utils = @import("string_utils.zig");
 

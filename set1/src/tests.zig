@@ -2,7 +2,7 @@
 // https://stackoverflow.com/a/75762773/2472220
 // comptime forces Zig to import the files even if they aren't used
 comptime {
-    _ = @import("crypto.zig");
+    _ = @import("crypto/xor.zig");
     _ = @import("helpers.zig");
     _ = @import("string_utils.zig");
 }
