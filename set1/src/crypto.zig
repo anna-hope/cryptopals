@@ -205,7 +205,7 @@ const InputBlocks = struct {
         return BlockIterator.init(self);
     }
 
-    /// Returns the underlying buffer without `nulls` at the end (if any).
+    /// Returns the underlying buffer, with `null`s replaced by PAD.
     /// Caller owns the returned memory.
     fn dataTrimmed(self: Self, should_pad: bool) ![]u8 {
         var data_trimmed = try std.ArrayList(u8).initCapacity(self.allocator, self.data.len);
