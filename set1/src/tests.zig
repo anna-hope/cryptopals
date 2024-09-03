@@ -3,6 +3,7 @@
 // comptime forces Zig to import the files even if they aren't used
 comptime {
     _ = @import("crypto/xor.zig");
+    _ = @import("crypto/ecb.zig");
     _ = @import("helpers.zig");
     _ = @import("string_utils.zig");
 }
