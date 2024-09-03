@@ -710,7 +710,7 @@ test "break repeating-key XOR mary" {
     const helpers = @import("../helpers.zig");
     const allocator = testing.allocator;
 
-    const encrypted_filename = "data/frankenstein_encrypted_mary.txt";
+    const encrypted_filename = "data/frankenstein_encrypted_maryshelley.txt";
     const dir = fs.cwd();
 
     // Use readlines because the file may have ... multiple lines
