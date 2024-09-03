@@ -6,7 +6,8 @@ const process = std.process;
 
 const Allocator = mem.Allocator;
 
-const crypto = @import("crypto/xor.zig");
+const xor = @import("xor.zig");
+const ecb = @import("ecb.zig");
 const helpers = @import("helpers.zig");
 const string_utils = @import("string_utils.zig");
 
@@ -42,14 +43,14 @@ fn encrypt(allocator: Allocator, args: *process.ArgIterator) !Base64String {
     const input = try cwd.readFileAlloc(allocator, input_path, 1024 * 1024 * 10);
     defer allocator.free(input);
 
-    const encrypted = try crypto.xorWithRepeatingKey(allocator, input, key);
+    const encrypted = try xor.xorWithRepeatingKey(allocator, input, key);
     defer allocator.free(encrypted);
 
     const encoded = try string_utils.Base64String.init(allocator, encrypted);
     return encoded;
 }
 
-fn decrypt(allocator: Allocator, args: *process.ArgIterator) !crypto.DecryptedRepeatingKeyOutput {
+fn decrypt(allocator: Allocator, args: *process.ArgIterator) !xor.DecryptedRepeatingKeyOutput {
     var input_path: []const u8 = undefined;
     const maybe_input_path = args.next();
 
@@ -76,7 +77,7 @@ fn decrypt(allocator: Allocator, args: *process.ArgIterator) !crypto.DecryptedRe
     var words = try helpers.readLines(allocator, root_dir, dict_path, null);
     defer words.deinit();
 
-    const decrypted = try crypto.breakRepeatingKeyXor(allocator, b64input, min_key_len, max_key_len, words.data);
+    const decrypted = try xor.breakRepeatingKeyXor(allocator, b64input, min_key_len, max_key_len, words.data);
     return decrypted;
 }
 

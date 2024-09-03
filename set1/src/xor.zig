@@ -1,5 +1,5 @@
 const std = @import("std");
-const string_utils = @import("../string_utils.zig");
+const string_utils = @import("string_utils.zig");
 
 const base64 = std.base64;
 const fmt = std.fmt;
@@ -547,7 +547,7 @@ test "fast fixed xor" {
 test "decrypt XOR'd hex" {
     const allocator = testing.allocator;
     const dict_path = "/usr/share/dict/words";
-    const helpers = @import("../helpers.zig");
+    const helpers = @import("helpers.zig");
 
     const input = HexString.initFromHex("1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736");
 
@@ -672,7 +672,7 @@ test "fast make and transpose blocks" {
 }
 
 test "break repeating-key XOR jane" {
-    const helpers = @import("../helpers.zig");
+    const helpers = @import("helpers.zig");
     const allocator = testing.allocator;
 
     const encrypted_filename = "data/pride_prejudice_encrypted_jane.txt";
@@ -707,7 +707,7 @@ test "break repeating-key XOR jane" {
 }
 
 test "break repeating-key XOR maryshelley" {
-    const helpers = @import("../helpers.zig");
+    const helpers = @import("helpers.zig");
     const allocator = testing.allocator;
 
     const encrypted_filename = "data/frankenstein_encrypted_maryshelley.txt";
