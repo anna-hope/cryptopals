@@ -487,7 +487,7 @@ fn breakRepeatingKeyFixedLen(allocator: Allocator, input: []const u8, key_len: u
     defer original_blocks_decrypted.deinit();
 
     const key = try key_bytes.toOwnedSlice();
-    const decrypted_data = try original_blocks_decrypted.dataTrimmed(false);
+    const decrypted_data = try original_blocks_decrypted.dataTrimmed(true);
     return DecryptedRepeatingKeyOutput.init(allocator, key, decrypted_data, total_key_score);
 }
 
@@ -706,7 +706,7 @@ test "break repeating-key XOR jane" {
     try testing.expectEqualStrings(unencrypted_input, decrypted.output);
 }
 
-test "break repeating-key XOR mary" {
+test "break repeating-key XOR maryshelley" {
     const helpers = @import("../helpers.zig");
     const allocator = testing.allocator;
 
@@ -727,12 +727,12 @@ test "break repeating-key XOR mary" {
     var words = try helpers.readLines(allocator, root_dir, dict_path, null);
     defer words.deinit();
 
-    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 10, words.data);
+    const decrypted = try breakRepeatingKeyXor(allocator, b64input, 2, 30, words.data);
     defer allocator.free(decrypted.output);
     defer allocator.free(decrypted.key);
 
     const unencrypted_filename = "data/frankenstein.txt";
-    const unencrypted_input = try dir.readFileAlloc(allocator, unencrypted_filename, 1024);
+    const unencrypted_input = try dir.readFileAlloc(allocator, unencrypted_filename, 1024 * 10);
     defer allocator.free(unencrypted_input);
 
     try testing.expectStringStartsWith(decrypted.output, unencrypted_input);
