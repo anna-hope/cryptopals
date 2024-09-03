@@ -214,8 +214,6 @@ const InputBlocks = struct {
                 try data_trimmed.append(byte);
             } else if (should_pad) {
                 try data_trimmed.append(default_pad_char);
-            } else {
-                break;
             }
         }
         return try data_trimmed.toOwnedSlice();
