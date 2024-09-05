@@ -100,8 +100,8 @@ pub fn main() !void {
 
     var output: []const u8 = undefined;
 
-    if (maybe_mode) |some_mode| {
-        if (mem.eql(u8, some_mode, "encrypt")) {
+    if (maybe_mode) |mode| {
+        if (mem.eql(u8, mode, "encrypt")) {
             if (encrypt(allocator, &args_iterator)) |encrypted| {
                 output = encrypted.buf;
             } else |err| switch (err) {
@@ -112,7 +112,7 @@ pub fn main() !void {
                 },
                 else => return err,
             }
-        } else if (mem.eql(u8, some_mode, "decrypt")) {
+        } else if (mem.eql(u8, mode, "decrypt")) {
             if (decrypt(allocator, &args_iterator)) |decrypted| {
                 try stdout.print("brute forced encryption key: '{s}'\n", .{decrypted.key});
                 output = decrypted.output;
@@ -129,6 +129,8 @@ pub fn main() !void {
         } else {
             return ProgramError.UnsupportedMode;
         }
+    } else {
+        return error.NotEnoughArguments;
     }
 
     try stdout.print("{s}\n", .{output});
