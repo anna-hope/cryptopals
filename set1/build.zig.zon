@@ -24,8 +24,8 @@
     // internet connectivity.
     .dependencies = .{
         .openssl = .{
-            .url = "https://github.com/anna-hope/openssl-zig/archive/refs/heads/remove-aarch-64_32.zip",
-            .hash = "1220d2e5b966406500d0fb2f7e63e4f73cf427a5ee5255ad92319e08a45751d63ef1",
+            .url = "/Users/annahope/projects/openssl-zig",
+            .hash = "1220f4d1e0756f9f97b66853961db664c2e5f9a9e9f86ba23aad89d43008f256e2a3",
         },
     },
     .paths = .{

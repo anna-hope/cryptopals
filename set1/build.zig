@@ -29,6 +29,9 @@ pub fn build(b: *std.Build) void {
     lib.installHeadersDirectory(openssl.path("ssl"), "openssl", .{});
     lib.installLibraryHeaders(openssl.artifact("ssl"));
     lib.linkLibC();
+    lib.linkLibrary(openssl.artifact("crypto"));
+    b.installArtifact(openssl.artifact("crypto"));
+    b.installArtifact(openssl.artifact("ssl"));
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when

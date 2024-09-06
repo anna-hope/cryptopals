@@ -130,7 +130,8 @@ pub fn main() !void {
             return ProgramError.UnsupportedMode;
         }
     } else {
-        return error.NotEnoughArguments;
+        output = try ecb.aesEcbDecrypt(allocator);
+        std.debug.print("{any}\n", .{output});
     }
 
     try stdout.print("{s}\n", .{output});
